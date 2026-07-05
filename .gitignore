@@ -1,0 +1,11 @@
+# Mantener solo estos elementos rastreados
+*
+!/.gitignore
+!/backend/
+!/frontend/
+!/docker-compose.yml
+
+# Permitir el contenido de backend y frontend
+!/backend/**
+!/frontend/**
+

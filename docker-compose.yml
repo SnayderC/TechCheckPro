@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: techcheck_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: techcheck_db
+      POSTGRES_USER: techcheck_admin
+      POSTGRES_PASSWORD: supersecurepassword2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: techcheck_django
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_NAME=techcheck_db
+      - DB_USER=techcheck_admin
+      - DB_PASSWORD=supersecurepassword2026
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
