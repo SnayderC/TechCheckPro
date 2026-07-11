@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: techcheck_postgres_prod
+    restart: always
+    environment:
+      POSTGRES_DB: techcheck_db
+      POSTGRES_USER: techcheck_admin
+      POSTGRES_PASSWORD: supersecurepassword2026
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: techcheck_django_prod
+    restart: always
+    environment:
+      - DEBUG=False
+      - ALLOWED_HOSTS=localhost,127.0.0.1,backend
+      - DB_NAME=techcheck_db
+      - DB_USER=techcheck_admin
+      - DB_PASSWORD=supersecurepassword2026
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: /api
+    container_name: techcheck_nginx_prod
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data_prod:

@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+import urllib.parse
+from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,12 +23,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-_yoc13=f&f#tv^x4gjb780ty=oum6r!a#ch$*c_%dikpfa*&b0'
+SECRET_KEY = os.environ.get(
+    'SECRET_KEY',
+    'django-insecure-_yoc13=f&f#tv^x4gjb780ty=oum6r!a#ch$*c_%dikpfa*&b0',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = os.environ.get(
+    'ALLOWED_HOSTS',
+    'localhost,127.0.0.1,backend,.vercel.app',
+).split(',')
+
+# Vercel inyecta VERCEL_URL automáticamente en cada despliegue
+if vercel_url := os.environ.get('VERCEL_URL'):
+    ALLOWED_HOSTS.append(vercel_url)
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+if vercel_url:
+    CSRF_TRUSTED_ORIGINS.append(f'https://{vercel_url}')
 
 
 # Application definition
@@ -54,6 +74,7 @@ AUTH_USER_MODEL = 'core.Usuario'
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -86,16 +107,34 @@ WSGI_APPLICATION = 'techcheck.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
+def _database_from_url(database_url):
+    url = urllib.parse.urlparse(database_url)
+    config = {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'techcheck_db'),
-        'USER': os.environ.get('DB_USER', 'techcheck_admin'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'supersecurepassword2026'),
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+        'NAME': url.path.lstrip('/'),
+        'USER': url.username,
+        'PASSWORD': url.password,
+        'HOST': url.hostname,
+        'PORT': url.port or 5432,
     }
-}
+    if url.hostname and url.hostname not in ('localhost', '127.0.0.1', 'db'):
+        config['OPTIONS'] = {'sslmode': 'require'}
+    return config
+
+
+if database_url := os.environ.get('DATABASE_URL'):
+    DATABASES = {'default': _database_from_url(database_url)}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'techcheck_db'),
+            'USER': os.environ.get('DB_USER', 'techcheck_admin'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', 'supersecurepassword2026'),
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+        }
+    }
 
 
 # Password validation
@@ -133,6 +172,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -141,3 +181,18 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': True,
+}

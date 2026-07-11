@@ -4,8 +4,12 @@
 !/backend/
 !/frontend/
 !/docker-compose.yml
+!/docker-compose.prod.yml
+!/vercel.json
+!/.vercelignore
 
 # Permitir el contenido de backend y frontend
 !/backend/**
 !/frontend/**
 
+contexto.md

@@ -1,0 +1,5 @@
+[tool.vercel]
+entrypoint = "techcheck.wsgi:application"
+
+[tool.vercel.scripts]
+build = "python build.py"

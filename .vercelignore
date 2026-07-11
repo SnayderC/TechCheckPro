@@ -1,0 +1,11 @@
+backend/.venv
+frontend/node_modules
+**/__pycache__
+**/*.pyc
+*.pdf
+*.xlsx
+*.docx
+guiosad.html
+guiosad.py
+prototipo.html
+main.py
