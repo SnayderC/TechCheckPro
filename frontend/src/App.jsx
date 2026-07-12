@@ -1,15 +1,23 @@
 import React from 'react';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContext';
+import { useAuth } from './hooks/useAuth';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ShieldCheck, LogOut, User as UserIcon, RefreshCw } from 'lucide-react';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Evaluation from './pages/Evaluation';
 import Report from './pages/Report';
+import Compare from './pages/Compare';
+import WhatIf from './pages/WhatIf';
+import ExecutiveDashboard from './pages/ExecutiveDashboard';
+import AdminUsers from './pages/AdminUsers';
+import AdminCatalog from './pages/AdminCatalog';
 
-const ProtectedRoute = ({ children }) => {
-  const { user } = useAuth();
-  return user ? children : <Navigate to="/login" />;
+const ProtectedRoute = ({ children, adminOnly = false }) => {
+  const { user, isAdmin } = useAuth();
+  if (!user) return <Navigate to="/login" />;
+  if (adminOnly && !isAdmin) return <Navigate to="/" />;
+  return children;
 };
 
 const LoginRoute = () => {
@@ -22,19 +30,31 @@ const SYNC_LABELS = {
   saving: { text: 'Autoguardando...', className: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
   saved: { text: 'Guardado', className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
   error: { text: 'Error de sync', className: 'bg-red-500/10 text-red-400 border-red-500/20' },
+  offline: { text: 'Progreso guardado temporalmente', className: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
 };
 
 function WizardLayout() {
   const [currentTab, setCurrentTab] = React.useState('dashboard');
   const [syncStatus, setSyncStatus] = React.useState('idle');
-  const { user, logout } = useAuth();
+  const { user, logout, isAdmin } = useAuth();
+
+  const tabs = [
+    { id: 'dashboard', label: 'Panel de Control', roles: 'all' },
+    { id: 'evaluation', label: 'Matriz TOE', roles: 'all' },
+    { id: 'report', label: 'Dictamen FODA', roles: 'all' },
+    { id: 'compare', label: 'Comparar', roles: 'all' },
+    { id: 'whatif', label: 'What-If', roles: 'all' },
+    ...(isAdmin ? [
+      { id: 'executive', label: 'Dashboard Gerencial', roles: 'admin' },
+      { id: 'admin-catalog', label: 'Catálogo TOE', roles: 'admin' },
+      { id: 'admin-users', label: 'Usuarios', roles: 'admin' },
+    ] : []),
+  ];
 
   const handleTabChange = (tabId) => {
-    if (tabId === 'evaluation' || tabId === 'report') {
-      if (!localStorage.getItem('activeEvalId')) {
-        alert('Primero registre o seleccione una auditoría en el Panel de Control.');
-        return;
-      }
+    if (['evaluation', 'report', 'whatif'].includes(tabId) && !localStorage.getItem('activeEvalId')) {
+      alert('Primero registre o seleccione una auditoría en el Panel de Control.');
+      return;
     }
     setCurrentTab(tabId);
   };
@@ -50,35 +70,23 @@ function WizardLayout() {
           </div>
           <div>
             <h1 className="text-sm font-semibold tracking-wide text-white uppercase">TechCheck Pro</h1>
-            <p className="text-[10px] text-gray-500">Módulo de Inferencia de Adopción FLOSS (TOE)</p>
+            <p className="text-[10px] text-gray-500">Evaluación de adopción FLOSS</p>
           </div>
         </div>
 
         <div className="flex items-center gap-4">
-          <span
-            className={`hidden sm:flex text-xs px-2.5 py-1 rounded-full border font-medium items-center gap-1.5 ${syncConfig.className}`}
-          >
-            {syncStatus === 'saving' ? (
-              <RefreshCw size={12} className="animate-spin" />
-            ) : (
-              <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-            )}
+          <span className={`hidden sm:flex text-xs px-2.5 py-1 rounded-full border font-medium items-center gap-1.5 ${syncConfig.className}`}>
+            {syncStatus === 'saving' ? <RefreshCw size={12} className="animate-spin" /> : <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
             {syncConfig.text}
           </span>
-
           <div className="h-5 w-[1px] bg-gray-800 hidden sm:block" />
-
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 text-xs text-gray-300 bg-gray-900/80 px-3 py-1.5 rounded-xl border border-gray-800 font-medium">
               <UserIcon size={14} className="text-blue-400" />
-              <span>{user?.username || 'Usuario'}</span>
+              <span>{user?.username}</span>
+              {isAdmin && <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">ADMIN</span>}
             </div>
-
-            <button
-              onClick={logout}
-              title="Cerrar Sesión"
-              className="bg-red-500/10 hover:bg-red-500/20 text-red-400 p-2 rounded-xl border border-red-500/20 transition-all cursor-pointer flex items-center justify-center active:scale-95"
-            >
+            <button onClick={logout} title="Cerrar Sesión" className="bg-red-500/10 hover:bg-red-500/20 text-red-400 p-2 rounded-xl border border-red-500/20 transition-all cursor-pointer">
               <LogOut size={16} />
             </button>
           </div>
@@ -87,18 +95,12 @@ function WizardLayout() {
 
       <nav className="max-w-6xl mx-auto px-4 mt-6">
         <div className="flex border-b border-gray-800 text-sm overflow-x-auto">
-          {[
-            { id: 'dashboard', label: '1. Panel de Control & Alcance' },
-            { id: 'evaluation', label: '2. Matriz de Evaluación (61 ítems)' },
-            { id: 'report', label: '3. Dictamen & Matriz FODA' },
-          ].map((tab) => (
+          {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => handleTabChange(tab.id)}
-              className={`px-6 py-3 font-medium transition-all cursor-pointer whitespace-nowrap ${
-                currentTab === tab.id
-                  ? 'border-b-2 border-blue-500 text-blue-400 font-semibold'
-                  : 'text-gray-500 hover:text-gray-300'
+              className={`px-4 py-3 font-medium transition-all cursor-pointer whitespace-nowrap text-xs sm:text-sm ${
+                currentTab === tab.id ? 'border-b-2 border-blue-500 text-blue-400 font-semibold' : 'text-gray-500 hover:text-gray-300'
               }`}
             >
               {tab.label}
@@ -108,13 +110,14 @@ function WizardLayout() {
       </nav>
 
       <main className="max-w-6xl mx-auto p-4 mt-4 mb-12">
-        {currentTab === 'dashboard' && (
-          <Dashboard onNavigate={() => handleTabChange('evaluation')} />
-        )}
-        {currentTab === 'evaluation' && (
-          <Evaluation onNext={() => handleTabChange('report')} onSyncChange={setSyncStatus} />
-        )}
+        {currentTab === 'dashboard' && <Dashboard onNavigate={() => handleTabChange('evaluation')} />}
+        {currentTab === 'evaluation' && <Evaluation onNext={() => handleTabChange('report')} onSyncChange={setSyncStatus} />}
         {currentTab === 'report' && <Report />}
+        {currentTab === 'compare' && <Compare />}
+        {currentTab === 'whatif' && <WhatIf />}
+        {currentTab === 'executive' && isAdmin && <ExecutiveDashboard />}
+        {currentTab === 'admin-catalog' && isAdmin && <AdminCatalog />}
+        {currentTab === 'admin-users' && isAdmin && <AdminUsers />}
       </main>
     </div>
   );
@@ -126,14 +129,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginRoute />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <WizardLayout />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/" element={<ProtectedRoute><WizardLayout /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </BrowserRouter>

@@ -23,6 +23,7 @@ class SoftwareObjetivo(models.Model):
     nombre = models.CharField(max_length=150)
     version = models.CharField(max_length=50)
     proveedor = models.CharField(max_length=150)
+    descripcion = models.TextField(blank=True, default='')
 
     def __str__(self):
         return f"{self.nombre} v{self.version} ({self.proveedor})"
@@ -73,6 +74,7 @@ class Evaluacion(models.Model):
     """
     ESTADOS = (
         ('En Progreso', 'En Progreso'),
+        ('Pausado', 'Pausado'),
         ('Calculado', 'Calculado'),
         ('Bloqueado', 'Bloqueado/Solo Lectura'),
     )
@@ -80,7 +82,9 @@ class Evaluacion(models.Model):
     software = models.ForeignKey(SoftwareObjetivo, on_delete=models.PROTECT, related_name='evaluaciones')
     fecha_inicio = models.DateTimeField(auto_now_add=True)
     fecha_ultima_modificacion = models.DateTimeField(auto_now=True)
+    fecha_emision_dictamen = models.DateTimeField(blank=True, null=True)
     estado = models.CharField(max_length=20, choices=ESTADOS, default='En Progreso')
+    archivado = models.BooleanField(default=False)
     
     # Promedios calculados decimales (Sustituyen la lógica empírica del GUIOSAD viejo)
     promedio_T = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
@@ -117,6 +121,36 @@ class RespuestaEvaluacion(models.Model):
     evaluacion = models.ForeignKey(Evaluacion, on_delete=models.CASCADE, related_name='respuestas')
     subfactor = models.ForeignKey(Subfactor, on_delete=models.PROTECT)
     valor_likert = models.PositiveSmallIntegerField(default=1) # 1: No cumple, 2: Desconoce, 3: Parcial, 4: Total
+    respondido = models.BooleanField(default=False)
 
     class Meta:
         unique_together = ('evaluacion', 'subfactor')
+
+
+class AuditLog(models.Model):
+    """RF-06: trazabilidad de acciones sobre evaluaciones."""
+
+    ACCIONES = (
+        ('CREAR', 'Creación de proyecto'),
+        ('AUTOSAVE', 'Autoguardado'),
+        ('CALCULAR', 'Cálculo de dictamen'),
+        ('BLOQUEAR', 'Cierre y bloqueo'),
+        ('REABRIR', 'Reapertura por administrador'),
+        ('SIMULAR', 'Simulación What-If'),
+        ('PAUSAR', 'Pausa de evaluación'),
+        ('ARCHIVAR', 'Archivo de proyecto'),
+    )
+
+    usuario = models.ForeignKey(Usuario, on_delete=models.PROTECT, related_name='auditorias')
+    evaluacion = models.ForeignKey(
+        Evaluacion, on_delete=models.CASCADE, related_name='logs', null=True, blank=True,
+    )
+    accion = models.CharField(max_length=20, choices=ACCIONES)
+    detalle = models.TextField(blank=True, default='')
+    fecha = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-fecha']
+
+    def __str__(self):
+        return f'{self.accion} — {self.usuario.username} — {self.fecha:%Y-%m-%d %H:%M}'

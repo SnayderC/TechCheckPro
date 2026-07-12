@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import { ShieldCheck, Lock, User, Loader2 } from 'lucide-react';
 
@@ -19,9 +19,14 @@ function Login() {
       await login(credentials.username, credentials.password);
       navigate('/');
     } catch (err) {
-      const msg = err.response?.status === 401
-        ? 'Sesión expirada. Inicie sesión nuevamente.'
-        : err.response?.data?.error || 'Credenciales inválidas. Verifique usuario y contraseña.';
+      let msg;
+      if (!err.response) {
+        msg = 'No se pudo conectar al servidor. Verifique que el backend esté en ejecución (puerto 8000).';
+      } else if (err.response.status === 401) {
+        msg = 'Usuario o contraseña inválidos';
+      } else {
+        msg = err.response.data?.detail || err.response.data?.error || 'Credenciales inválidas.';
+      }
       setError(msg);
     } finally {
       setLoading(false);
@@ -41,7 +46,7 @@ function Login() {
           </div>
           
           <h1 className="text-2xl font-bold text-white tracking-tight">Bienvenido</h1>
-          <p className="text-gray-400 text-sm mt-1">Acceso al motor de inferencia TOE</p>
+          <p className="text-gray-400 text-sm mt-1">Inicie sesión para continuar</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">

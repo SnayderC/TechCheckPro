@@ -1,20 +1,27 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import apiClient from '../services/api';
+import React, { createContext, useState, useEffect } from 'react';
+import apiClient, { authService } from '../services/api';
 
-const AuthContext = createContext();
+export const AuthContext = createContext(null);
 
 const parseJwt = (token) => {
   try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    return payload;
+    return JSON.parse(atob(token.split('.')[1]));
   } catch {
     return null;
   }
 };
 
-export const AuthProvider = ({ children }) => {
+export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const loadPerfil = async () => {
+    const perfil = await authService.getPerfil();
+    setUser(perfil);
+    localStorage.setItem('username', perfil.username);
+    localStorage.setItem('rol', perfil.rol);
+    return perfil;
+  };
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -30,7 +37,14 @@ export const AuthProvider = ({ children }) => {
       const isExpired = !payload || payload.exp * 1000 <= Date.now();
 
       if (!isExpired) {
-        setUser({ username: localStorage.getItem('username') || payload.username || 'Usuario' });
+        try {
+          await loadPerfil();
+        } catch {
+          setUser({
+            username: localStorage.getItem('username') || 'Usuario',
+            rol: localStorage.getItem('rol') || 'EVALUADOR',
+          });
+        }
         setLoading(false);
         return;
       }
@@ -39,19 +53,20 @@ export const AuthProvider = ({ children }) => {
         try {
           const res = await apiClient.post('/token/refresh/', { refresh });
           localStorage.setItem('access', res.data.access);
-          setUser({ username: localStorage.getItem('username') || 'Usuario' });
+          try {
+            await loadPerfil();
+          } catch {
+            setUser({
+              username: localStorage.getItem('username') || 'Usuario',
+              rol: localStorage.getItem('rol') || 'EVALUADOR',
+            });
+          }
         } catch {
-          localStorage.removeItem('access');
-          localStorage.removeItem('refresh');
-          localStorage.removeItem('username');
-          localStorage.removeItem('activeEvalId');
+          localStorage.clear();
         }
       } else {
-        localStorage.removeItem('access');
-        localStorage.removeItem('username');
-        localStorage.removeItem('activeEvalId');
+        localStorage.clear();
       }
-
       setLoading(false);
     };
 
@@ -63,16 +78,19 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem('access', res.data.access);
     localStorage.setItem('refresh', res.data.refresh);
     localStorage.setItem('username', username);
-    setUser({ username });
+    try {
+      await loadPerfil();
+    } catch {
+      setUser({ username, rol: localStorage.getItem('rol') || 'EVALUADOR' });
+    }
   };
 
   const logout = () => {
-    localStorage.removeItem('access');
-    localStorage.removeItem('refresh');
-    localStorage.removeItem('username');
-    localStorage.removeItem('activeEvalId');
+    localStorage.clear();
     setUser(null);
   };
+
+  const isAdmin = user?.rol === 'ADMIN';
 
   if (loading) {
     return (
@@ -83,16 +101,8 @@ export const AuthProvider = ({ children }) => {
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, logout, isAdmin, loadPerfil }}>
       {children}
     </AuthContext.Provider>
   );
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth debe usarse dentro de un AuthProvider');
-  }
-  return context;
-};
+}

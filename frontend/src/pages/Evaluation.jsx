@@ -9,14 +9,14 @@ import {
   Search,
   AlertCircle,
 } from 'lucide-react';
-import { toeService } from '../services/api';
-
-const DECISION_LEVELS = [
-  { val: 0, label: 'Irrelevante' },
-  { val: 1, label: 'Opcional' },
-  { val: 2, label: 'Importante' },
-  { val: 3, label: 'Fundamental' },
-];
+import { toeService, wizardCache } from '../services/api';
+import {
+  DECISION_LEVELS,
+  calcularImportanciaRelativa,
+  esFactorRelevante,
+  etiquetaImportancia,
+  normalizarNivel,
+} from '../utils/guiosadCalculos';
 
 const LIKERT_LEVELS = [
   { val: 1, label: 'No cumple' },
@@ -47,6 +47,8 @@ function Evaluation({ onNext, onSyncChange }) {
   const [filtroEstado, setFiltroEstado] = useState('todos');
   const [procesando, setProcesando] = useState(false);
   const [calcularError, setCalcularError] = useState(null);
+  const [respondidos, setRespondidos] = useState({});
+  const [pendientesMsg, setPendientesMsg] = useState(null);
 
   const autosaveTimer = useRef(null);
 
@@ -86,10 +88,22 @@ function Evaluation({ onNext, onSyncChange }) {
         });
         setSubfactorScores(puntajes);
 
+        const respMap = {};
+        Object.entries(detalle.respondidos || {}).forEach(([id, val]) => {
+          respMap[id] = Boolean(val);
+        });
+        setRespondidos(respMap);
+
+        const cache = wizardCache.load(evalId);
+        if (cache?.puntajes) {
+          setSubfactorScores((prev) => ({ ...prev, ...cache.puntajes }));
+          if (cache.decisiones) setFactorDecisions((prev) => ({ ...prev, ...cache.decisiones }));
+        }
+
         const decisiones = {};
         catalogo.forEach((f) => {
           const guardada = detalle.decisiones?.[String(f.id)];
-          decisiones[f.id] = guardada !== undefined ? Number(guardada) : parseFloat(f.importancia_sugerida) || 2;
+          decisiones[f.id] = guardada !== undefined ? normalizarNivel(guardada) : 1;
         });
         setFactorDecisions(decisiones);
 
@@ -109,13 +123,16 @@ function Evaluation({ onNext, onSyncChange }) {
   }, []);
 
   const dispararAutosave = useCallback(
-    (nuevasDecisiones, nuevosPuntajes) => {
-      if (evaluacionEstado === 'Calculado') return;
+    (nuevasDecisiones, nuevosPuntajes, nuevosRespondidos) => {
+      if (evaluacionEstado === 'Calculado' || evaluacionEstado === 'Bloqueado') return;
 
-      if (autosaveTimer.current) {
-        clearTimeout(autosaveTimer.current);
-      }
+      wizardCache.save(evaluacionId, {
+        puntajes: nuevosPuntajes,
+        decisiones: nuevasDecisiones,
+        respondidos: nuevosRespondidos,
+      });
 
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
       updateSync('saving');
 
       autosaveTimer.current = setTimeout(async () => {
@@ -125,7 +142,7 @@ function Evaluation({ onNext, onSyncChange }) {
           setTimeout(() => updateSync('idle'), 2000);
         } catch (err) {
           console.error('Fallo en autoguardado:', err);
-          updateSync('error');
+          updateSync('offline');
         }
       }, 400);
     },
@@ -133,37 +150,56 @@ function Evaluation({ onNext, onSyncChange }) {
   );
 
   const handleDecisionChange = (factorId, valNum) => {
-    if (evaluacionEstado === 'Calculado') return;
+    if (evaluacionEstado === 'Calculado' || evaluacionEstado === 'Bloqueado') return;
     const nuevasDecisiones = { ...factorDecisions, [factorId]: valNum };
     setFactorDecisions(nuevasDecisiones);
-    dispararAutosave(nuevasDecisiones, subfactorScores);
+    dispararAutosave(nuevasDecisiones, subfactorScores, respondidos);
   };
 
   const handleScoreChange = (subfactorId, valNum) => {
-    if (evaluacionEstado === 'Calculado') return;
+    if (evaluacionEstado === 'Calculado' || evaluacionEstado === 'Bloqueado') return;
     const nuevosPuntajes = { ...subfactorScores, [subfactorId]: valNum };
+    const nuevosRespondidos = { ...respondidos, [subfactorId]: true };
     setSubfactorScores(nuevosPuntajes);
-    dispararAutosave(factorDecisions, nuevosPuntajes);
+    setRespondidos(nuevosRespondidos);
+    dispararAutosave(factorDecisions, nuevosPuntajes, nuevosRespondidos);
   };
 
+  const factorMeta = useMemo(() => {
+    const meta = {};
+    factores.forEach((f) => {
+      const isVal = normalizarNivel(f.importancia_sugerida);
+      const idVal = normalizarNivel(factorDecisions[f.id] ?? 1);
+      const ir = calcularImportanciaRelativa(isVal, idVal);
+      meta[f.id] = {
+        isVal,
+        idVal,
+        ir,
+        relevante: esFactorRelevante(ir.valor),
+      };
+    });
+    return meta;
+  }, [factores, factorDecisions]);
+
   const todosSubfactores = useMemo(() => {
-    return factores.flatMap((f) =>
-      (f.subfactores || []).map((sf) => ({
+    return factores.flatMap((f) => {
+      if (!factorMeta[f.id]?.relevante) return [];
+      return (f.subfactores || []).map((sf) => ({
         ...sf,
         factorId: f.id,
         factorNombre: f.nombre_factor,
         dimensionNombre: f.dimension_nombre,
         alcance: f.alcance,
-      })),
-    );
-  }, [factores]);
+      }));
+    });
+  }, [factores, factorMeta]);
 
   const subfactoresFiltrados = useMemo(() => {
     const termino = busqueda.trim().toLowerCase();
     return todosSubfactores.filter((sf) => {
       const puntaje = subfactorScores[sf.id] ?? 1;
-      const esPendiente = puntaje <= 1;
-      const esCompletado = puntaje > 1;
+      const esPendiente = !respondidos[sf.id];
+      const esCompletado = respondidos[sf.id];
 
       if (filtroEstado === 'pendientes' && !esPendiente) return false;
       if (filtroEstado === 'completados' && !esCompletado) return false;
@@ -175,12 +211,10 @@ function Evaluation({ onNext, onSyncChange }) {
         sf.dimensionNombre.toLowerCase().includes(termino)
       );
     });
-  }, [todosSubfactores, subfactorScores, busqueda, filtroEstado]);
+  }, [todosSubfactores, subfactorScores, respondidos, busqueda, filtroEstado]);
 
   const totalSubfactores = todosSubfactores.length;
-  const completados = todosSubfactores.filter(
-    (sf) => (subfactorScores[sf.id] ?? 1) > 1,
-  ).length;
+  const completados = todosSubfactores.filter((sf) => respondidos[sf.id]).length;
   const porcentaje = totalSubfactores > 0 ? Math.round((completados / totalSubfactores) * 100) : 0;
 
   const factoresConCoincidencias = useMemo(() => {
@@ -191,13 +225,19 @@ function Evaluation({ onNext, onSyncChange }) {
 
   const handleCalcular = async () => {
     setCalcularError(null);
+    setPendientesMsg(null);
     setProcesando(true);
     try {
       await toeService.calcularDictamen(evaluacionId);
+      wizardCache.clear(evaluacionId);
       onNext();
     } catch (err) {
-      console.error('Error procesando dictamen:', err);
-      setCalcularError('No se pudo calcular el dictamen. Intente nuevamente.');
+      const data = err.response?.data;
+      if (data?.error === 'completitud_incompleta') {
+        setPendientesMsg(data.mensaje || 'Faltan subfactores por calificar.');
+      } else {
+        setCalcularError(data?.error || 'No se pudo calcular el dictamen.');
+      }
     } finally {
       setProcesando(false);
     }
@@ -207,7 +247,7 @@ function Evaluation({ onNext, onSyncChange }) {
     return (
       <div className="glass p-12 rounded-2xl border border-gray-800 text-center space-y-4">
         <RefreshCw size={32} className="animate-spin text-blue-500 mx-auto" />
-        <p className="text-gray-300 font-medium">Cargando catálogo TOE y progreso guardado...</p>
+        <p className="text-gray-300 font-medium">Cargando evaluación...</p>
       </div>
     );
   }
@@ -222,16 +262,15 @@ function Evaluation({ onNext, onSyncChange }) {
   }
 
   const modoBusqueda = busqueda.trim().length > 0 || filtroEstado !== 'todos';
-  const soloLectura = evaluacionEstado === 'Calculado';
+  const soloLectura = evaluacionEstado === 'Calculado' || evaluacionEstado === 'Bloqueado';
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Barra superior */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#0a0a0a] p-5 rounded-2xl border border-gray-800">
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <Sliders size={18} className="text-blue-500" />
-            Matriz de Evaluación TOE ({totalSubfactores} ítems)
+            Matriz de Evaluación TOE ({todosSubfactores.length} ítems relevantes)
           </h2>
           <p className="text-xs text-gray-400 mt-1">
             {softwareNombre && <>Auditoría: <strong className="text-gray-200">{softwareNombre}</strong> · </>}
@@ -248,7 +287,6 @@ function Evaluation({ onNext, onSyncChange }) {
         </div>
       </div>
 
-      {/* Buscador y filtros RF-02/RF-04 */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-3 text-gray-500" />
@@ -279,7 +317,6 @@ function Evaluation({ onNext, onSyncChange }) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Sidebar de factores */}
         {!modoBusqueda && (
           <div className="lg:col-span-4 space-y-2">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 mb-3 flex items-center gap-1.5">
@@ -288,13 +325,9 @@ function Evaluation({ onNext, onSyncChange }) {
             <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
               {factoresConCoincidencias.map((f) => {
                 const isSelected = selectedFactor?.id === f.id;
-                const currentVal = factorDecisions[f.id] ?? parseFloat(f.importancia_sugerida);
-                const decisionLabel =
-                  DECISION_LEVELS.find((lvl) => lvl.val === Math.round(currentVal))?.label || 'Importante';
-                const sfDelFactor = f.subfactores || [];
-                const completadosFactor = sfDelFactor.filter(
-                  (sf) => (subfactorScores[sf.id] ?? 1) > 1,
-                ).length;
+                const meta = factorMeta[f.id];
+                const sfDelFactor = meta?.relevante ? f.subfactores || [] : [];
+                const completadosFactor = sfDelFactor.filter((sf) => respondidos[sf.id]).length;
 
                 return (
                   <div
@@ -304,20 +337,26 @@ function Evaluation({ onNext, onSyncChange }) {
                       isSelected
                         ? 'bg-blue-600/10 border-blue-500/50 glow-blue'
                         : 'glass border-gray-800 hover:border-gray-700'
-                    }`}
+                    } ${!meta?.relevante ? 'opacity-60' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-gray-800 text-gray-300 border border-gray-700">
                         {f.dimension_nombre}
                       </span>
                       <span className="text-[10px] text-gray-500">
-                        {completadosFactor}/{sfDelFactor.length}
+                        {meta?.relevante ? `${completadosFactor}/${sfDelFactor.length}` : '—'}
                       </span>
                     </div>
-                    <div className="font-semibold text-sm text-white flex items-center justify-between">
-                      {f.nombre_factor}
-                      <span className="text-[11px] font-normal text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded">
-                        {decisionLabel}
+                    <div className="font-semibold text-sm text-white flex items-center justify-between gap-2">
+                      <span>{f.nombre_factor}</span>
+                      <span
+                        className={`text-[10px] font-normal px-2 py-0.5 rounded shrink-0 ${
+                          meta?.relevante
+                            ? 'text-blue-400 bg-blue-500/10'
+                            : 'text-gray-500 bg-gray-800'
+                        }`}
+                      >
+                        IR: {meta?.ir.etiqueta}
                       </span>
                     </div>
                   </div>
@@ -327,7 +366,6 @@ function Evaluation({ onNext, onSyncChange }) {
           </div>
         )}
 
-        {/* Panel principal */}
         <div className={modoBusqueda ? 'lg:col-span-12' : 'lg:col-span-8'}>
           {modoBusqueda ? (
             <div className="space-y-3">
@@ -344,7 +382,8 @@ function Evaluation({ onNext, onSyncChange }) {
                     key={sf.id}
                     sf={sf}
                     index={index}
-                    currentScore={subfactorScores[sf.id] ?? 0}
+                    currentScore={subfactorScores[sf.id] ?? 1}
+                    calificado={respondidos[sf.id]}
                     onScoreChange={handleScoreChange}
                     soloLectura={soloLectura}
                     showFactorMeta
@@ -352,69 +391,25 @@ function Evaluation({ onNext, onSyncChange }) {
                 ))
               )}
             </div>
-          ) : (
-            selectedFactor && (
-              <>
-                <div className="glass p-5 rounded-2xl border border-gray-800 space-y-4 mb-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-800 pb-4 gap-2">
-                    <div>
-                      <span className="text-[10px] uppercase font-bold tracking-wider text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-md border border-blue-500/20">
-                        {selectedFactor.dimension_nombre}
-                      </span>
-                      <h3 className="text-xl font-bold text-white mt-2">{selectedFactor.nombre_factor}</h3>
-                    </div>
-                    <div className="text-xs bg-neutral-900 px-3 py-2 rounded-xl border border-gray-800 text-gray-300">
-                      Sugerida: <strong className="text-white">{parseFloat(selectedFactor.importancia_sugerida)}</strong>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-medium text-gray-300 block mb-2 flex items-center gap-1.5">
-                      <HelpCircle size={14} className="text-gray-400" />
-                      Importancia asignada por el Decisor:
-                    </label>
-                    <div className="grid grid-cols-4 gap-1.5 bg-[#0a0a0a] p-1.5 rounded-xl border border-gray-800">
-                      {DECISION_LEVELS.map((item) => {
-                        const currentVal =
-                          factorDecisions[selectedFactor.id] ?? parseFloat(selectedFactor.importancia_sugerida);
-                        const active = Math.round(currentVal) === item.val;
-                        return (
-                          <button
-                            key={item.val}
-                            type="button"
-                            disabled={soloLectura}
-                            onClick={() => handleDecisionChange(selectedFactor.id, item.val)}
-                            className={`text-xs font-semibold py-2 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                              active
-                                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20'
-                                : 'text-gray-400 hover:text-white hover:bg-white/5'
-                            }`}
-                          >
-                            {item.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {(selectedFactor.subfactores || []).map((sf, index) => (
-                    <SubfactorCard
-                      key={sf.id}
-                      sf={sf}
-                      index={index}
-                      currentScore={subfactorScores[sf.id] ?? 0}
-                      onScoreChange={handleScoreChange}
-                      soloLectura={soloLectura}
-                    />
-                  ))}
-                </div>
-              </>
-            )
-          )}
+          ) : selectedFactor ? (
+            <FactorDetailPanel
+              factor={selectedFactor}
+              meta={factorMeta[selectedFactor.id]}
+              idVal={normalizarNivel(factorDecisions[selectedFactor.id] ?? 1)}
+              subfactorScores={subfactorScores}
+              respondidos={respondidos}
+              soloLectura={soloLectura}
+              onDecisionChange={handleDecisionChange}
+              onScoreChange={handleScoreChange}
+            />
+          ) : null}
 
           <div className="flex flex-col items-end gap-2 pt-6">
+            {pendientesMsg && (
+              <p className="text-amber-400 text-xs font-medium bg-amber-500/10 border border-amber-500/30 px-4 py-2 rounded-xl">
+                {pendientesMsg}
+              </p>
+            )}
             {calcularError && (
               <p className="text-red-400 text-xs font-medium">{calcularError}</p>
             )}
@@ -429,7 +424,7 @@ function Evaluation({ onNext, onSyncChange }) {
                 </>
               ) : (
                 <>
-                  Procesar Inferencia & Ver Dictamen <ArrowRight size={15} />
+                  Calcular dictamen <ArrowRight size={15} />
                 </>
               )}
             </button>
@@ -437,7 +432,6 @@ function Evaluation({ onNext, onSyncChange }) {
         </div>
       </div>
 
-      {/* Indicador flotante de autosave RF-04 */}
       {syncStatus !== 'idle' && (
         <div className="fixed bottom-6 right-6 z-50">
           <div
@@ -446,11 +440,14 @@ function Evaluation({ onNext, onSyncChange }) {
                 ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
                 : syncStatus === 'saved'
                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                  : 'bg-red-500/10 border-red-500/30 text-red-400'
+                  : syncStatus === 'offline'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                    : 'bg-red-500/10 border-red-500/30 text-red-400'
             }`}
           >
             {syncStatus === 'saving' && '⏳ Autoguardando...'}
             {syncStatus === 'saved' && '✓ Guardado'}
+            {syncStatus === 'offline' && '⚠ Progreso guardado temporalmente'}
             {syncStatus === 'error' && '✗ Error al guardar'}
           </div>
         </div>
@@ -459,7 +456,103 @@ function Evaluation({ onNext, onSyncChange }) {
   );
 }
 
-function SubfactorCard({ sf, index, currentScore, onScoreChange, soloLectura, showFactorMeta }) {
+function FactorDetailPanel({
+  factor,
+  meta,
+  idVal,
+  subfactorScores,
+  respondidos,
+  soloLectura,
+  onDecisionChange,
+  onScoreChange,
+}) {
+  const isVal = meta?.isVal ?? normalizarNivel(factor.importancia_sugerida);
+  const ir = meta?.ir ?? calcularImportanciaRelativa(isVal, idVal);
+  const factorRelevante = meta?.relevante ?? esFactorRelevante(ir.valor);
+
+  return (
+    <>
+      <div className="glass p-5 rounded-2xl border border-gray-800 space-y-4 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-800 pb-4 gap-2">
+          <div>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-md border border-blue-500/20">
+              {factor.dimension_nombre}
+            </span>
+            <h3 className="text-xl font-bold text-white mt-2">{factor.nombre_factor}</h3>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <div className="bg-neutral-900 px-3 py-2 rounded-xl border border-gray-800 text-gray-300">
+              Sugerida: <strong className="text-white">{etiquetaImportancia(isVal)}</strong>
+            </div>
+            <div className="bg-neutral-900 px-3 py-2 rounded-xl border border-gray-800 text-gray-300">
+              Decisor: <strong className="text-white">{etiquetaImportancia(idVal)}</strong>
+            </div>
+            <div
+              className={`px-3 py-2 rounded-xl border text-gray-300 ${
+                factorRelevante ? 'bg-blue-500/10 border-blue-500/30' : 'bg-gray-900 border-gray-800'
+              }`}
+            >
+              Relativa: <strong className="text-white">{ir.etiqueta}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs font-medium text-gray-300 block mb-2 flex items-center gap-1.5">
+            <HelpCircle size={14} className="text-gray-400" />
+            Evaluación del Decisor
+          </label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-[#0a0a0a] p-1.5 rounded-xl border border-gray-800">
+            {DECISION_LEVELS.map((item) => {
+              const active = idVal === item.val;
+              return (
+                <button
+                  key={item.val}
+                  type="button"
+                  disabled={soloLectura}
+                  onClick={() => onDecisionChange(factor.id, item.val)}
+                  className={`text-xs font-semibold py-2 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    active
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {!factorRelevante ? (
+        <div className="glass p-8 rounded-2xl border border-gray-800 text-center space-y-2">
+          <p className="text-sm text-gray-300 font-medium">Factor no relevante para esta auditoría</p>
+          <p className="text-xs text-gray-500 max-w-md mx-auto">
+            Con importancia relativa <strong className="text-gray-400">Irrelevante</strong>, este factor no participa
+            en el análisis. Ajuste la evaluación del decisor si desea incluirlo.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {(factor.subfactores || []).map((sf, index) => (
+            <SubfactorCard
+              key={sf.id}
+              sf={sf}
+              index={index}
+              currentScore={subfactorScores[sf.id] ?? 1}
+              calificado={respondidos[sf.id]}
+              onScoreChange={onScoreChange}
+              soloLectura={soloLectura}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function SubfactorCard({ sf, index, currentScore, calificado, onScoreChange, soloLectura, showFactorMeta }) {
   return (
     <div className="glass p-4 rounded-xl border border-gray-800 space-y-3">
       {showFactorMeta && (
@@ -475,7 +568,7 @@ function SubfactorCard({ sf, index, currentScore, onScoreChange, soloLectura, sh
           <span className="text-blue-400 font-bold mr-2">{index + 1}.</span>
           {sf.enunciado_pregunta}
         </p>
-        {currentScore > 1 && (
+        {calificado && (
           <CheckCircle2 size={16} className="text-green-400 shrink-0 mt-0.5" />
         )}
       </div>

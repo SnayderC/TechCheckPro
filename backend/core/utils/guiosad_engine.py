@@ -1,90 +1,173 @@
 from decimal import Decimal
 from django.db import transaction
 from core.models import Evaluacion, DetalleEvaluacionFactor, RespuestaEvaluacion
+from core.utils.guiosad_calculos import (
+    calcular_importancia_relativa,
+    clasificar_foda,
+    es_factor_relevante,
+    normalizar_nivel,
+    resolver_dictamen,
+)
+
 
 class MotorGUIOSAD:
     """
-    Motor algorítmico desacoplado para el cálculo multidimensional TOE.
-    Sustituye la lógica de scripts locales y corrige la pérdida de precisión por truncamiento.
+    Motor algorítmico GUIOSAD — misma lógica que guiosad.html (Flexx).
+    Solo la interfaz cambió; los cálculos de IR, FODA y dictamen se mantienen.
     """
+
     @staticmethod
     @transaction.atomic
     def procesar_evaluacion(evaluacion_id):
         evaluacion = Evaluacion.objects.select_for_update().get(id=evaluacion_id)
-        detalles_factor = DetalleEvaluacionFactor.objects.filter(evaluacion=evaluacion).select_related('factor', 'factor__dimension')
-        respuestas = RespuestaEvaluacion.objects.filter(evaluacion=evaluacion).select_related('subfactor', 'subfactor__factor')
-        
-        # Mapear respuestas por factor para promediar Likert (1 al 4)
+        detalles_factor = (
+            DetalleEvaluacionFactor.objects.filter(evaluacion=evaluacion)
+            .select_related('factor', 'factor__dimension')
+        )
+        respuestas = (
+            RespuestaEvaluacion.objects.filter(evaluacion=evaluacion)
+            .select_related('subfactor', 'subfactor__factor')
+        )
+
         puntajes_por_factor = {}
         for resp in respuestas:
             f_id = resp.subfactor.factor_id
-            if f_id not in puntajes_por_factor:
-                puntajes_por_factor[f_id] = []
-            puntajes_por_factor[f_id].append(Decimal(resp.valor_likert))
-            
-        hay_clase_a = False
-        hay_clase_b = False
-        
+            puntajes_por_factor.setdefault(f_id, []).append(Decimal(resp.valor_likert))
+
         dim_totales = {'Tecnológica': [], 'Organizacional': [], 'Económica': []}
-        
+        detalles_para_dictamen = []
+
         for detalle in detalles_factor:
             f = detalle.factor
-            # 1. Cálculo Decimal Exacto de Importancia Relativa (Sin división entera //)
-            imp_sugerida = f.importancia_sugerida
-            imp_decisor = detalle.importancia_decisor
-            imp_relativa = (imp_sugerida + imp_decisor) / Decimal('2.00')
-            detalle.importancia_relativa = round(imp_relativa, 2)
-            
-            # 2. Promedio de cumplimiento Likert en sus subfactores
+            is_val = normalizar_nivel(f.importancia_sugerida)
+            id_val = normalizar_nivel(detalle.importancia_decisor)
+            ir_val, ir_etiqueta = calcular_importancia_relativa(is_val, id_val)
+
+            detalle.importancia_relativa = Decimal(str(ir_val))
+
+            if not es_factor_relevante(ir_val):
+                detalle.resultado_foda = None
+                detalle.save()
+                continue
+
             lista_likert = puntajes_por_factor.get(f.id, [Decimal('1.00')])
             promedio_likert = sum(lista_likert) / Decimal(len(lista_likert))
-            
-            # Almacenar para el promedio global de la dimensión TOE (Porcentaje 0-100%)
+
             porcentaje_factor = (promedio_likert / Decimal('4.00')) * Decimal('100.00')
             dim_nombre = f.dimension.nombre_dimension
             if dim_nombre in dim_totales:
                 dim_totales[dim_nombre].append(porcentaje_factor)
-            
-            # 3. Clasificación FODA (Cruce entre cumplimiento y alcance)
-            es_cumplimiento_alto = promedio_likert >= Decimal('3.00')
-            alcance = f.alcance
-            
-            if es_cumplimiento_alto:
-                if alcance == 'Interno':
-                    detalle.resultado_foda = 'Fortaleza'
-                else: # Externo o Ambos
-                    detalle.resultado_foda = 'Oportunidad'
-            else:
-                if alcance == 'Interno':
-                    detalle.resultado_foda = 'Debilidad'
-                else: # Externo o Ambos
-                    detalle.resultado_foda = 'Amenaza'
-            
-            detalle.save()
-            
-            # 4. Evaluación para Regla de Dictamen (Kerly / Matriz Recomendación)
-            # Consideramos relevante para bloqueo crítico si la importancia relativa es >= 2.0 (Importante/Fundamental)
-            es_factor_critico = detalle.importancia_relativa >= Decimal('2.00')
-            es_negativo = detalle.resultado_foda in ['Debilidad', 'Amenaza']
-            
-            if es_negativo and es_factor_critico:
-                hay_clase_a = True
-            elif es_negativo and not es_factor_critico:
-                hay_clase_b = True
 
-        # 5. Promedios Globales TOE
-        evaluacion.promedio_T = round(sum(dim_totales['Tecnológica']) / Decimal(max(1, len(dim_totales['Tecnológica']))), 2)
-        evaluacion.promedio_O = round(sum(dim_totales['Organizacional']) / Decimal(max(1, len(dim_totales['Organizacional']))), 2)
-        evaluacion.promedio_E = round(sum(dim_totales['Económica']) / Decimal(max(1, len(dim_totales['Económica']))), 2)
-        
-        # 6. Dictamen Final Oficial
-        if hay_clase_a:
-            evaluacion.dictamen_final = "A-CLASS: No es posible adoptar. Se han detectado amenazas y/o debilidades en factores cuya importancia relativa es fundamental o importante. Es indispensable proporcionar recursos para mitigar las brechas críticas."
-        elif hay_clase_b:
-            evaluacion.dictamen_final = "B-CLASS: Es posible adoptar con condiciones. Se detectaron debilidades menores en criterios opcionales. Se sugiere revisar planes de mejora a mediano plazo."
-        else:
-            evaluacion.dictamen_final = "C-CLASS: Adopción Viable Óptima. Todos los factores críticos han sido identificados como Oportunidades o Fortalezas. La organización cumple satisfactoriamente con los requisitos TOE."
-            
+            detalle.resultado_foda = clasificar_foda(promedio_likert, f.alcance)
+            detalle.save()
+
+            detalles_para_dictamen.append({
+                'resultado_foda': detalle.resultado_foda,
+                'ir_etiqueta': ir_etiqueta,
+            })
+
+        evaluacion.promedio_T = round(
+            sum(dim_totales['Tecnológica']) / Decimal(max(1, len(dim_totales['Tecnológica']))), 2
+        )
+        evaluacion.promedio_O = round(
+            sum(dim_totales['Organizacional']) / Decimal(max(1, len(dim_totales['Organizacional']))), 2
+        )
+        evaluacion.promedio_E = round(
+            sum(dim_totales['Económica']) / Decimal(max(1, len(dim_totales['Económica']))), 2
+        )
+
+        evaluacion.dictamen_final = resolver_dictamen(detalles_para_dictamen)[1]
         evaluacion.estado = 'Calculado'
         evaluacion.save()
         return evaluacion
+
+    @staticmethod
+    def simular(evaluacion_id, puntajes_override=None, decisiones_override=None):
+        """RF-12: recalcula dictamen en memoria sin persistir cambios."""
+        evaluacion = Evaluacion.objects.get(id=evaluacion_id)
+        detalles_factor = (
+            DetalleEvaluacionFactor.objects.filter(evaluacion=evaluacion)
+            .select_related('factor', 'factor__dimension')
+        )
+        respuestas = (
+            RespuestaEvaluacion.objects.filter(evaluacion=evaluacion)
+            .select_related('subfactor', 'subfactor__factor')
+        )
+
+        puntajes_override = puntajes_override or {}
+        decisiones_override = decisiones_override or {}
+
+        puntajes_por_factor = {}
+        for resp in respuestas:
+            sf_id = str(resp.subfactor_id)
+            val = puntajes_override.get(sf_id, puntajes_override.get(resp.subfactor_id, resp.valor_likert))
+            f_id = resp.subfactor.factor_id
+            puntajes_por_factor.setdefault(f_id, []).append(Decimal(val))
+
+        dim_totales = {'Tecnológica': [], 'Organizacional': [], 'Económica': []}
+        detalles_para_dictamen = []
+        desglose = {'fortalezas': [], 'oportunidades': [], 'debilidades': [], 'amenazas': []}
+
+        for detalle in detalles_factor:
+            f = detalle.factor
+            fac_id = str(f.id)
+            id_raw = decisiones_override.get(fac_id, decisiones_override.get(f.id, detalle.importancia_decisor))
+            is_val = normalizar_nivel(f.importancia_sugerida)
+            id_val = normalizar_nivel(id_raw)
+            ir_val, ir_etiqueta = calcular_importancia_relativa(is_val, id_val)
+
+            if not es_factor_relevante(ir_val):
+                continue
+
+            lista_likert = puntajes_por_factor.get(f.id, [Decimal('1.00')])
+            promedio_likert = sum(lista_likert) / Decimal(len(lista_likert))
+            porcentaje_factor = (promedio_likert / Decimal('4.00')) * Decimal('100.00')
+            dim_nombre = f.dimension.nombre_dimension
+            if dim_nombre in dim_totales:
+                dim_totales[dim_nombre].append(porcentaje_factor)
+
+            resultado_foda = clasificar_foda(promedio_likert, f.alcance)
+            item = {
+                'nombre': f.nombre_factor,
+                'dimension': dim_nombre,
+                'importancia': float(ir_val),
+                'alcance': f.alcance,
+                'resultado_foda': resultado_foda,
+            }
+            if resultado_foda == 'Fortaleza':
+                desglose['fortalezas'].append(item)
+            elif resultado_foda == 'Oportunidad':
+                desglose['oportunidades'].append(item)
+            elif resultado_foda == 'Debilidad':
+                desglose['debilidades'].append(item)
+            else:
+                desglose['amenazas'].append(item)
+
+            detalles_para_dictamen.append({
+                'resultado_foda': resultado_foda,
+                'ir_etiqueta': ir_etiqueta,
+            })
+
+        promedio_T = float(
+            sum(dim_totales['Tecnológica']) / Decimal(max(1, len(dim_totales['Tecnológica'])))
+        )
+        promedio_O = float(
+            sum(dim_totales['Organizacional']) / Decimal(max(1, len(dim_totales['Organizacional'])))
+        )
+        promedio_E = float(
+            sum(dim_totales['Económica']) / Decimal(max(1, len(dim_totales['Económica'])))
+        )
+
+        clase, dictamen_texto = resolver_dictamen(detalles_para_dictamen)
+        clase_map = {'A-CLASS': 'CLASE A', 'B-CLASS': 'CLASE B', 'C-CLASS': 'CLASE C'}
+
+        return {
+            'promedios_dimensiones': {
+                'Tecnologica': round(promedio_T, 2),
+                'Organizacional': round(promedio_O, 2),
+                'Economica': round(promedio_E, 2),
+            },
+            'clase_dictamen': clase_map.get(clase, clase),
+            'dictamen_final': dictamen_texto,
+            'desglose_foda': desglose,
+        }

@@ -1,53 +1,49 @@
 import React, { useState, useEffect } from 'react';
-import { PlusCircle, Play, History, Shield, RefreshCw, Layers, CheckCircle2, AlertCircle } from 'lucide-react';
+import { PlusCircle, Play, History, Shield, RefreshCw, CheckCircle2, AlertCircle, AlertTriangle, Search, Filter } from 'lucide-react';
 import { toeService } from '../services/api';
 
 function Dashboard({ onNavigate }) {
   const [evaluaciones, setEvaluaciones] = useState([]);
+  const [alertas, setAlertas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creando, setCreando] = useState(false);
   const [errorCarga, setErrorCarga] = useState(null);
+  const [filtros, setFiltros] = useState({ q: '', dictamen: '', anio: '' });
 
-  // Formulario para nuevo software objetivo
-  const [formData, setFormData] = useState({
-    nombre: '',
-    version: '',
-    proveedor: ''
-  });
+  const [formData, setFormData] = useState({ nombre: '', version: '', proveedor: '', descripcion: '' });
 
   const cargarHistorial = async () => {
     try {
       setLoading(true);
       setErrorCarga(null);
-      const data = await toeService.getMisEvaluaciones();
+      const [data, alertasData] = await Promise.all([
+        toeService.getMisEvaluaciones(filtros),
+        toeService.getAlertas(),
+      ]);
       setEvaluaciones(data || []);
+      setAlertas(alertasData || []);
     } catch (err) {
-      console.error('Error al cargar historial de auditorías:', err);
+      console.error(err);
       setErrorCarga('No se pudo cargar el portafolio. Verifique la conexión con el servidor.');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    cargarHistorial();
-  }, []);
+  useEffect(() => { cargarHistorial(); }, [filtros.q, filtros.dictamen, filtros.anio]);
 
   const handleCrearProyecto = async (e) => {
     e.preventDefault();
     if (!formData.nombre.trim()) return;
-
     setCreando(true);
     try {
       const res = await toeService.iniciarEvaluacion(formData);
       if (res.evaluacion_id) {
-        // Sincronizamos el nuevo proyecto en localStorage y pasamos al Wizard
         localStorage.setItem('activeEvalId', res.evaluacion_id);
         onNavigate();
       }
     } catch (err) {
-      console.error('Error creando proyecto:', err);
-      alert('No se pudo crear el proyecto. Verifique la conexión.');
+      alert(err.response?.data?.error || 'No se pudo crear el proyecto.');
     } finally {
       setCreando(false);
     }
@@ -58,170 +54,142 @@ function Dashboard({ onNavigate }) {
     onNavigate();
   };
 
+  const irAlerta = (evalId) => {
+    localStorage.setItem('activeEvalId', evalId);
+    onNavigate();
+  };
+
   return (
     <div className="space-y-8 animate-fade-in">
-      {/* Banner de Bienvenida y Contexto */}
-      <div className="glass p-8 rounded-3xl border border-gray-800 relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div className="space-y-2 z-10">
+      {alertas.length > 0 && (
+        <div className="space-y-2">
+          {alertas.map((a) => (
+            <div
+              key={a.evaluacion_id}
+              onClick={() => irAlerta(a.evaluacion_id)}
+              className="glass p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 flex items-center gap-3 cursor-pointer animate-pulse hover:animate-none"
+            >
+              <AlertTriangle className="text-amber-400 shrink-0" size={20} />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-amber-300">
+                  Evaluación incompleta: {a.software}
+                </p>
+                <p className="text-xs text-amber-400/80">
+                  Sin modificaciones hace {a.dias_inactivo} días — haga clic para reanudar
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="glass p-8 rounded-3xl border border-gray-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+        <div className="space-y-2">
           <span className="text-[10px] font-bold uppercase tracking-widest text-blue-400 bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
-            Marco Tecnológico-Organizacional-Económico
+            Marco TOE
           </span>
-          <h2 className="text-3xl font-black text-white tracking-tight">
-            Gestión de Alcance & Auditoría
-          </h2>
-          <p className="text-gray-400 text-sm max-w-xl leading-relaxed">
-            Seleccione una evaluación existente para continuar su calificación o registre un nuevo software objetivo para inicializar la matriz de 61 subfactores en PostgreSQL.
-          </p>
+          <h2 className="text-3xl font-black text-white tracking-tight">Gestión de Alcance & Auditoría</h2>
+          <p className="text-gray-400 text-sm max-w-xl">Registre software FLOSS o continúe evaluaciones en curso.</p>
         </div>
-        <div className="hidden lg:flex items-center justify-center w-20 h-20 rounded-2xl bg-blue-600/10 border border-blue-500/30 text-blue-400 shrink-0">
-          <Shield size={40} strokeWidth={1.5} />
+        <Shield size={40} className="hidden lg:block text-blue-400" strokeWidth={1.5} />
+      </div>
+
+      <div className="glass p-4 rounded-2xl border border-gray-800 flex flex-wrap gap-3 items-center">
+        <Filter size={16} className="text-gray-500" />
+        <div className="relative flex-1 min-w-[180px]">
+          <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
+          <input
+            placeholder="Buscar software o evaluador..."
+            value={filtros.q}
+            onChange={(e) => setFiltros({ ...filtros, q: e.target.value })}
+            className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl pl-9 pr-3 py-2 text-sm text-white"
+          />
         </div>
+        <select value={filtros.dictamen} onChange={(e) => setFiltros({ ...filtros, dictamen: e.target.value })}
+          className="bg-[#0a0a0a] border border-gray-800 rounded-xl px-3 py-2 text-sm text-white">
+          <option value="">Todos los dictámenes</option>
+          <option value="A">Adoptar (A)</option>
+          <option value="B">Condicionar (B)</option>
+          <option value="C">Rechazar (C)</option>
+        </select>
+        <input placeholder="Año" value={filtros.anio} onChange={(e) => setFiltros({ ...filtros, anio: e.target.value })}
+          className="w-24 bg-[#0a0a0a] border border-gray-800 rounded-xl px-3 py-2 text-sm text-white" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* COLUMNA IZQUIERDA (5 Col): Formulario de Registro */}
-        <div className="lg:col-span-5 space-y-4">
-          <div className="glass p-6 rounded-2xl border border-gray-800 space-y-6">
-            <div className="flex items-center gap-2 border-b border-gray-800/80 pb-4">
+        <div className="lg:col-span-5">
+          <div className="glass p-6 rounded-2xl border border-gray-800 space-y-4">
+            <div className="flex items-center gap-2 border-b border-gray-800 pb-4">
               <PlusCircle className="text-blue-500" size={20} />
-              <h3 className="text-base font-bold text-white">Auditar Nuevo Software FLOSS</h3>
+              <h3 className="text-base font-bold text-white">Nuevo Software FLOSS</h3>
             </div>
-
-            <form onSubmit={handleCrearProyecto} className="space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-gray-400 block mb-1.5 uppercase tracking-wider">
-                  Nombre del Software Objetivo *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: Odoo ERP, Nextcloud Hub, WordPress..."
-                  value={formData.nombre}
-                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
-                  className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500 transition-all"
-                />
-              </div>
-
+            <form onSubmit={handleCrearProyecto} className="space-y-3">
+              <input required placeholder="Nombre del software *" value={formData.nombre}
+                onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
+                className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl px-4 py-3 text-sm text-white" />
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-gray-400 block mb-1.5 uppercase tracking-wider">
-                    Versión
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ej: 17.0 Community"
-                    value={formData.version}
-                    onChange={(e) => setFormData({ ...formData, version: e.target.value })}
-                    className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500 transition-all"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-400 block mb-1.5 uppercase tracking-wider">
-                    Proveedor / Comunidad
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ej: Odoo S.A."
-                    value={formData.proveedor}
-                    onChange={(e) => setFormData({ ...formData, proveedor: e.target.value })}
-                    className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500 transition-all"
-                  />
-                </div>
+                <input placeholder="Versión" value={formData.version} onChange={(e) => setFormData({ ...formData, version: e.target.value })}
+                  className="bg-[#0a0a0a] border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-white" />
+                <input placeholder="Proveedor" value={formData.proveedor} onChange={(e) => setFormData({ ...formData, proveedor: e.target.value })}
+                  className="bg-[#0a0a0a] border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-white" />
               </div>
-
-              <button
-                type="submit"
-                disabled={creando}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-blue-500/20 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer mt-2"
-              >
-                {creando ? (
-                  <>
-                    <RefreshCw className="animate-spin" size={18} /> Registrando en Base de Datos...
-                  </>
-                ) : (
-                  <>
-                    <Play size={16} fill="currentColor" /> Inicializar Matriz & Auditar
-                  </>
-                )}
+              <textarea placeholder="Descripción corporativa" rows={2} value={formData.descripcion}
+                onChange={(e) => setFormData({ ...formData, descripcion: e.target.value })}
+                className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl px-4 py-2.5 text-sm text-white resize-none" />
+              <button type="submit" disabled={creando}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl text-sm cursor-pointer flex items-center justify-center gap-2">
+                {creando ? <RefreshCw className="animate-spin" size={18} /> : <Play size={16} fill="currentColor" />}
+                Crear Proyecto
               </button>
             </form>
           </div>
         </div>
 
-        {/* COLUMNA DERECHA (7 Col): Historial de Evaluaciones */}
-        <div className="lg:col-span-7 space-y-4">
+        <div className="lg:col-span-7 space-y-3">
           <div className="flex items-center justify-between px-1">
-            <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2">
-              <History size={16} className="text-blue-400" /> Mis Auditorías en Curso ({evaluaciones.length})
+            <h3 className="text-sm font-bold text-gray-300 flex items-center gap-2">
+              <History size={16} className="text-blue-400" /> Historial ({evaluaciones.length})
             </h3>
-            <button
-              onClick={cargarHistorial}
-              className="text-xs text-gray-400 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
-            >
-              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Actualizar lista
+            <button onClick={cargarHistorial} className="text-xs text-gray-400 hover:text-white cursor-pointer flex items-center gap-1">
+              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Actualizar
             </button>
           </div>
 
-          {errorCarga && (
-            <div className="glass p-4 rounded-xl border border-red-500/30 bg-red-500/5 text-red-400 text-xs font-medium">
-              {errorCarga}
-            </div>
-          )}
+          {errorCarga && <div className="glass p-4 rounded-xl border border-red-500/30 text-red-400 text-xs">{errorCarga}</div>}
 
           {loading ? (
-            <div className="glass p-12 rounded-2xl border border-gray-800 text-center space-y-3">
+            <div className="glass p-12 rounded-2xl border border-gray-800 text-center">
               <RefreshCw className="animate-spin text-blue-500 mx-auto" size={28} />
-              <p className="text-xs text-gray-400">Consultando portafolio en PostgreSQL...</p>
             </div>
           ) : evaluaciones.length === 0 ? (
-            <div className="glass p-10 rounded-2xl border border-gray-800/80 text-center space-y-3">
+            <div className="glass p-10 rounded-2xl border border-gray-800 text-center space-y-2">
               <AlertCircle className="text-gray-600 mx-auto" size={36} />
-              <p className="text-sm font-medium text-gray-300">No tienes auditorías registradas aún.</p>
-              <p className="text-xs text-gray-500">Utiliza el formulario de la izquierda para crear tu primer proyecto FLOSS.</p>
+              <p className="text-sm text-gray-300">No se encontraron proyectos bajo los criterios especificados.</p>
             </div>
           ) : (
-            <div className="space-y-3 max-h-[460px] overflow-y-auto pr-1">
-              {evaluaciones.map((item) => {
-                const esCalculado = item.estado === 'Calculado';
-                return (
-                  <div
-                    key={item.id}
-                    onClick={() => handleSeleccionarProyecto(item.id)}
-                    className="glass p-5 rounded-2xl border border-gray-800 hover:border-blue-500/50 transition-all cursor-pointer flex items-center justify-between gap-4 group"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-white text-base group-hover:text-blue-400 transition-colors">
-                          {item.software?.nombre || 'Software sin título'}
-                        </span>
-                        <span className="text-[10px] font-mono bg-gray-800 text-gray-400 px-2 py-0.5 rounded border border-gray-700">
-                          v{item.software?.version || '1.0'}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-500 flex items-center gap-3">
-                        <span>ID: #{item.id}</span>
-                        <span>Modificado: {new Date(item.fecha_ultima_modificacion).toLocaleDateString()}</span>
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                      <span
-                        className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-md border flex items-center gap-1 ${
-                          esCalculado
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                            : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                        }`}
-                      >
-                        {esCalculado && <CheckCircle2 size={12} />}
-                        {item.estado}
-                      </span>
-                      <div className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-500 transition-all">
-                        <Play size={14} fill="currentColor" />
-                      </div>
-                    </div>
+            <div className="space-y-3 max-h-[480px] overflow-y-auto">
+              {evaluaciones.map((item) => (
+                <div key={item.id} onClick={() => handleSeleccionarProyecto(item.id)}
+                  className="glass p-5 rounded-2xl border border-gray-800 hover:border-blue-500/50 cursor-pointer flex items-center justify-between gap-4 group">
+                  <div>
+                    <span className="font-bold text-white group-hover:text-blue-400">{item.software?.nombre}</span>
+                    <span className="text-[10px] font-mono bg-gray-800 text-gray-400 px-2 py-0.5 rounded ml-2">v{item.software?.version}</span>
+                    <p className="text-xs text-gray-500 mt-1">
+                      #{item.id} · {item.evaluador && `${item.evaluador} · `}
+                      {new Date(item.fecha_ultima_modificacion).toLocaleDateString()}
+                      {item.clase_dictamen && ` · ${item.clase_dictamen}`}
+                    </p>
                   </div>
-                );
-              })}
+                  <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-md border flex items-center gap-1 ${
+                    item.estado === 'Bloqueado' ? 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+                    : item.estado === 'Calculado' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  }`}>
+                    {(item.estado === 'Calculado' || item.estado === 'Bloqueado') && <CheckCircle2 size={12} />}
+                    {item.estado}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </div>

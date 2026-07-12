@@ -1,5 +1,17 @@
 from rest_framework import serializers
-from core.models import SoftwareObjetivo, Factor, Subfactor, Evaluacion, DetalleEvaluacionFactor
+from django.contrib.auth import get_user_model
+
+from core.models import (
+    SoftwareObjetivo,
+    Factor,
+    Subfactor,
+    Evaluacion,
+    DetalleEvaluacionFactor,
+    DimensionTOE,
+    AuditLog,
+)
+
+Usuario = get_user_model()
 
 
 class SubfactorSerializer(serializers.ModelSerializer):
@@ -20,10 +32,43 @@ class FactorSerializer(serializers.ModelSerializer):
         ]
 
 
+class SubfactorAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subfactor
+        fields = ['id', 'factor', 'enunciado_pregunta']
+
+
+class FactorAdminSerializer(serializers.ModelSerializer):
+    subfactores = SubfactorAdminSerializer(many=True, read_only=True)
+    dimension_nombre = serializers.ReadOnlyField(source='dimension.nombre_dimension')
+
+    class Meta:
+        model = Factor
+        fields = [
+            'id', 'nombre_factor', 'dimension', 'dimension_nombre',
+            'importancia_sugerida', 'alcance', 'subfactores',
+        ]
+
+
+class DimensionSerializer(serializers.ModelSerializer):
+    factores = FactorAdminSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = DimensionTOE
+        fields = ['id', 'nombre_dimension', 'factores']
+
+
 class SoftwareSerializer(serializers.ModelSerializer):
     class Meta:
         model = SoftwareObjetivo
-        fields = ['id', 'nombre', 'version', 'proveedor']
+        fields = ['id', 'nombre', 'version', 'proveedor', 'descripcion']
+
+
+class UsuarioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Usuario
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'rol', 'is_active', 'date_joined']
+        read_only_fields = ['date_joined']
 
 
 class DetalleFactorSerializer(serializers.ModelSerializer):
@@ -41,13 +86,28 @@ class DetalleFactorSerializer(serializers.ModelSerializer):
 
 class EvaluacionResumenSerializer(serializers.ModelSerializer):
     software = SoftwareSerializer(read_only=True)
+    evaluador = serializers.ReadOnlyField(source='usuario.username')
+    clase_dictamen = serializers.SerializerMethodField()
 
     class Meta:
         model = Evaluacion
         fields = [
-            'id', 'software', 'fecha_inicio',
-            'fecha_ultima_modificacion', 'estado',
+            'id', 'software', 'evaluador', 'fecha_inicio',
+            'fecha_ultima_modificacion', 'fecha_emision_dictamen',
+            'estado', 'archivado', 'dictamen_final', 'clase_dictamen',
+            'promedio_T', 'promedio_O', 'promedio_E',
         ]
+
+    def get_clase_dictamen(self, obj):
+        if not obj.dictamen_final:
+            return None
+        if obj.dictamen_final.startswith('A-CLASS'):
+            return 'CLASE A'
+        if obj.dictamen_final.startswith('B-CLASS'):
+            return 'CLASE B'
+        if obj.dictamen_final.startswith('C-CLASS'):
+            return 'CLASE C'
+        return None
 
 
 class EvaluacionSerializer(serializers.ModelSerializer):
@@ -60,9 +120,10 @@ class EvaluacionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Evaluacion
         fields = [
-            'id', 'software', 'fecha_inicio', 'fecha_ultima_modificacion', 'estado',
-            'promedio_T', 'promedio_O', 'promedio_E', 'dictamen_final', 'detalles_factor',
-            'promedios_dimensiones', 'clase_dictamen', 'desglose_foda',
+            'id', 'software', 'fecha_inicio', 'fecha_ultima_modificacion',
+            'fecha_emision_dictamen', 'estado', 'archivado',
+            'promedio_T', 'promedio_O', 'promedio_E', 'dictamen_final',
+            'detalles_factor', 'promedios_dimensiones', 'clase_dictamen', 'desglose_foda',
         ]
 
     def get_promedios_dimensiones(self, obj):
@@ -74,12 +135,14 @@ class EvaluacionSerializer(serializers.ModelSerializer):
 
     def get_clase_dictamen(self, obj):
         if not obj.dictamen_final:
-            return 'CLASE C'
+            return 'CLASE A'
         if obj.dictamen_final.startswith('A-CLASS'):
             return 'CLASE A'
         if obj.dictamen_final.startswith('B-CLASS'):
             return 'CLASE B'
-        return 'CLASE C'
+        if obj.dictamen_final.startswith('C-CLASS'):
+            return 'CLASE C'
+        return 'CLASE A'
 
     @staticmethod
     def _item_foda(detalle):
@@ -114,3 +177,11 @@ class EvaluacionSerializer(serializers.ModelSerializer):
             elif resultado == 'Amenaza':
                 desglose['amenazas'].append(item)
         return desglose
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    usuario_nombre = serializers.ReadOnlyField(source='usuario.username')
+
+    class Meta:
+        model = AuditLog
+        fields = ['id', 'usuario_nombre', 'accion', 'detalle', 'fecha']

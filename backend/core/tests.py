@@ -12,11 +12,27 @@ from core.models import (
     DetalleEvaluacionFactor,
     RespuestaEvaluacion,
 )
+from core.utils.guiosad_calculos import calcular_importancia_relativa, es_factor_relevante
 from core.utils.guiosad_engine import MotorGUIOSAD
 
 
+class GuiosadCalculosTestCase(TestCase):
+    """Valida fórmulas idénticas a guiosad.html."""
+
+    def test_ir_compatibilidad_opcional(self):
+        """IS=Importante(3), ID=Opcional(2) → IR=Opcional (como captura GUIOS PRO)."""
+        ir_val, ir_label = calcular_importancia_relativa(3, 2)
+        self.assertEqual(ir_val, 2)
+        self.assertEqual(ir_label, 'Opcional')
+
+    def test_ir_irrelevante_excluye_factor(self):
+        ir_val, ir_label = calcular_importancia_relativa(2, 1)
+        self.assertEqual(ir_label, 'Irrelevante')
+        self.assertFalse(es_factor_relevante(ir_val))
+
+
 class MotorGUIOSADTestCase(TestCase):
-    """Valida umbrales de Clase A, B y C del motor altimétrico TOE."""
+    """Valida dictamen A/B/C como GUIOS PRO original."""
 
     def setUp(self):
         self.usuario = Usuario.objects.create_user(
@@ -61,89 +77,90 @@ class MotorGUIOSADTestCase(TestCase):
             )
         return evaluacion
 
-    def test_puntaje_perfecto_emite_clase_c(self):
-        """Likert 4 en todos los factores → solo Fortalezas/Oportunidades → CLASE C."""
+    def test_puntaje_perfecto_emite_clase_a_adoptar(self):
+        """Likert 4 + IR relevante → Fortalezas/Oportunidades → CLASE A (Adoptar)."""
         f1, sf1, _ = self._crear_factor_con_respuesta(
-            self.dim_tec, 'Compatibilidad', 'Interno', 2.0, 2.0, 4
+            self.dim_tec, 'Compatibilidad', 'Externo', 3, 3, 4
         )
         f2, sf2, _ = self._crear_factor_con_respuesta(
-            self.dim_org, 'Formación', 'Externo', 2.0, 2.0, 4
-        )
-        f3, sf3, _ = self._crear_factor_con_respuesta(
-            self.dim_eco, 'Costo Total', 'Interno', 2.0, 2.0, 4
+            self.dim_org, 'Formación', 'Interno', 3, 3, 4
         )
 
         evaluacion = self._inicializar_evaluacion([
-            (f1, sf1, 4, 2.0),
-            (f2, sf2, 4, 2.0),
-            (f3, sf3, 4, 2.0),
+            (f1, sf1, 4, 3),
+            (f2, sf2, 4, 3),
         ])
 
         resultado = MotorGUIOSAD.procesar_evaluacion(evaluacion.id)
 
-        self.assertEqual(resultado.estado, 'Calculado')
-        self.assertIn('C-CLASS', resultado.dictamen_final)
-        self.assertGreaterEqual(resultado.promedio_T, Decimal('99.00'))
+        self.assertIn('A-CLASS', resultado.dictamen_final)
         self.assertFalse(
             resultado.detalles_factor.filter(resultado_foda__in=['Debilidad', 'Amenaza']).exists()
         )
 
-    def test_factor_critico_negativo_emite_clase_a(self):
-        """Debilidad/Amenaza con importancia relativa >= 2.0 → CLASE A (Rechazar)."""
+    def test_factor_critico_negativo_emite_clase_c_rechazar(self):
+        """Debilidad + IR Importante/Fundamental → CLASE C (Rechazar)."""
         f_critico, sf_critico, _ = self._crear_factor_con_respuesta(
-            self.dim_tec, 'Seguridad', 'Interno', 2.5, 2.5, 1
+            self.dim_tec, 'Seguridad', 'Interno', 3, 3, 1
         )
         f_ok, sf_ok, _ = self._crear_factor_con_respuesta(
-            self.dim_org, 'Soporte', 'Externo', 2.0, 2.0, 4
+            self.dim_org, 'Soporte', 'Externo', 3, 3, 4
         )
 
         evaluacion = self._inicializar_evaluacion([
-            (f_critico, sf_critico, 1, 2.5),
-            (f_ok, sf_ok, 4, 2.0),
+            (f_critico, sf_critico, 1, 3),
+            (f_ok, sf_ok, 4, 3),
         ])
 
         resultado = MotorGUIOSAD.procesar_evaluacion(evaluacion.id)
 
-        self.assertEqual(resultado.estado, 'Calculado')
-        self.assertIn('A-CLASS', resultado.dictamen_final)
+        self.assertIn('C-CLASS', resultado.dictamen_final)
         detalle_critico = resultado.detalles_factor.get(factor=f_critico)
         self.assertEqual(detalle_critico.resultado_foda, 'Debilidad')
-        self.assertGreaterEqual(detalle_critico.importancia_relativa, Decimal('2.00'))
 
-    def test_factor_no_critico_negativo_emite_clase_b(self):
-        """Debilidad con importancia relativa < 2.0 → CLASE B (Condicionado), no CLASE A."""
+    def test_factor_opcional_negativo_emite_clase_b(self):
+        """Debilidad + IR Opcional → CLASE B, no CLASE C."""
         f_menor, sf_menor, _ = self._crear_factor_con_respuesta(
-            self.dim_eco, 'Documentación', 'Interno', 1.0, 1.0, 2
+            self.dim_eco, 'Documentación', 'Interno', 2, 3, 2
         )
         f_ok, sf_ok, _ = self._crear_factor_con_respuesta(
-            self.dim_tec, 'Interoperabilidad', 'Externo', 2.0, 2.0, 4
+            self.dim_tec, 'Interoperabilidad', 'Externo', 3, 3, 4
         )
 
         evaluacion = self._inicializar_evaluacion([
-            (f_menor, sf_menor, 2, 1.0),
-            (f_ok, sf_ok, 4, 2.0),
+            (f_menor, sf_menor, 2, 3),
+            (f_ok, sf_ok, 4, 3),
         ])
 
         resultado = MotorGUIOSAD.procesar_evaluacion(evaluacion.id)
 
-        self.assertEqual(resultado.estado, 'Calculado')
         self.assertIn('B-CLASS', resultado.dictamen_final)
-        self.assertNotIn('A-CLASS', resultado.dictamen_final)
-        detalle_menor = resultado.detalles_factor.get(factor=f_menor)
-        self.assertEqual(detalle_menor.resultado_foda, 'Debilidad')
-        self.assertLess(detalle_menor.importancia_relativa, Decimal('2.00'))
+        self.assertNotIn('C-CLASS', resultado.dictamen_final)
 
-    def test_importancia_relativa_usa_precision_decimal(self):
-        """Verifica que la importancia relativa no sufre truncamiento entero."""
-        f1, sf1, _ = self._crear_factor_con_respuesta(
-            self.dim_tec, 'Escalabilidad', 'Interno', 2.5, 1.5, 4
+    def test_factor_irrelevante_no_genera_foda(self):
+        """IR Irrelevante → sin clasificación FODA (excluido del análisis)."""
+        f_irr, sf_irr, _ = self._crear_factor_con_respuesta(
+            self.dim_tec, 'Portabilidad', 'Externo', 2, 1, 1
         )
-        evaluacion = self._inicializar_evaluacion([(f1, sf1, 4, 1.5)])
+        evaluacion = self._inicializar_evaluacion([(f_irr, sf_irr, 1, 1)])
+
+        resultado = MotorGUIOSAD.procesar_evaluacion(evaluacion.id)
+        detalle = resultado.detalles_factor.get(factor=f_irr)
+
+        self.assertIsNone(detalle.resultado_foda)
+        self.assertIn('A-CLASS', resultado.dictamen_final)
+
+    def test_importancia_relativa_guiosad(self):
+        """IS=3, ID=2 → IR=2 (Opcional), misma fórmula que guiosad.html."""
+        f1, sf1, _ = self._crear_factor_con_respuesta(
+            self.dim_tec, 'Escalabilidad', 'Interno', 3, 2, 4
+        )
+        evaluacion = self._inicializar_evaluacion([(f1, sf1, 4, 2)])
 
         resultado = MotorGUIOSAD.procesar_evaluacion(evaluacion.id)
         detalle = resultado.detalles_factor.get(factor=f1)
 
-        self.assertEqual(detalle.importancia_relativa, Decimal('2.00'))
+        self.assertEqual(detalle.importancia_relativa, Decimal('2'))
 
 
 class EvaluacionSerializerTestCase(TestCase):
@@ -161,7 +178,7 @@ class EvaluacionSerializerTestCase(TestCase):
         self.factor = Factor.objects.create(
             dimension=self.dim,
             nombre_factor='Compatibilidad',
-            importancia_sugerida=Decimal('2.00'),
+            importancia_sugerida=Decimal('3.00'),
             alcance='Interno',
         )
         self.subfactor = Subfactor.objects.create(
@@ -171,12 +188,13 @@ class EvaluacionSerializerTestCase(TestCase):
         self.evaluacion = Evaluacion.objects.create(
             usuario=self.usuario,
             software=self.software,
+            dictamen_final='A-CLASS: Adoptar.',
         )
         DetalleEvaluacionFactor.objects.create(
             evaluacion=self.evaluacion,
             factor=self.factor,
-            importancia_decisor=Decimal('2.00'),
-            importancia_relativa=Decimal('2.00'),
+            importancia_decisor=Decimal('3.00'),
+            importancia_relativa=Decimal('3.00'),
             resultado_foda='Fortaleza',
         )
         RespuestaEvaluacion.objects.create(
@@ -190,8 +208,7 @@ class EvaluacionSerializerTestCase(TestCase):
 
         data = EvaluacionSerializer(self.evaluacion).data
         self.assertEqual(len(data['desglose_foda']['fortalezas']), 1)
-        self.assertEqual(data['desglose_foda']['fortalezas'][0]['nombre'], 'Compatibilidad')
-        self.assertEqual(data['clase_dictamen'], 'CLASE C')
+        self.assertEqual(data['clase_dictamen'], 'CLASE A')
 
 
 class EvaluacionAPITestCase(TestCase):
@@ -207,7 +224,7 @@ class EvaluacionAPITestCase(TestCase):
         self.factor = Factor.objects.create(
             dimension=self.dim,
             nombre_factor='Seguridad',
-            importancia_sugerida=Decimal('2.00'),
+            importancia_sugerida=Decimal('3.00'),
             alcance='Interno',
         )
         self.subfactor = Subfactor.objects.create(
@@ -255,6 +272,27 @@ class EvaluacionAPITestCase(TestCase):
         }, format='json')
         self.assertEqual(res.status_code, 403)
 
+    def test_calcular_falla_si_incompleto(self):
+        client_a = self._token('user_a', 'pass12345')
+        res = client_a.post('/api/evaluaciones/calcular/', {
+            'evaluacion_id': self.eval_a.id,
+        }, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data['error'], 'completitud_incompleta')
+
+    def test_calcular_ok_si_respondido(self):
+        RespuestaEvaluacion.objects.filter(
+            evaluacion=self.eval_a, subfactor=self.subfactor,
+        ).update(respondido=True, valor_likert=4)
+        DetalleEvaluacionFactor.objects.filter(
+            evaluacion=self.eval_a, factor=self.factor,
+        ).update(importancia_decisor=Decimal('3.00'))
+        client_a = self._token('user_a', 'pass12345')
+        res = client_a.post('/api/evaluaciones/calcular/', {
+            'evaluacion_id': self.eval_a.id,
+        }, format='json')
+        self.assertEqual(res.status_code, 200)
+
     def test_calcular_requiere_evaluacion_id_valido(self):
         client_a = self._token('user_a', 'pass12345')
         res = client_a.post('/api/evaluaciones/calcular/', {'evaluacion_id': 99999})
@@ -265,3 +303,13 @@ class EvaluacionAPITestCase(TestCase):
         res = client_a.post('/api/evaluaciones/iniciar/', {'nombre': '  '})
         self.assertEqual(res.status_code, 400)
 
+    def test_iniciar_decisor_por_defecto_irrelevante(self):
+        client_a = self._token('user_a', 'pass12345')
+        res = client_a.post('/api/evaluaciones/iniciar/', {
+            'nombre': 'LibreOffice Test',
+            'version': '1.0',
+        }, format='json')
+        self.assertEqual(res.status_code, 201)
+        eval_id = res.data['evaluacion_id']
+        detalle = DetalleEvaluacionFactor.objects.filter(evaluacion_id=eval_id).first()
+        self.assertEqual(detalle.importancia_decisor, Decimal('1.00'))

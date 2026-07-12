@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useReactToPrint } from 'react-to-print';
-import { Download, ShieldAlert, RefreshCw, Layers, User, Calendar } from 'lucide-react';
+import { Download, ShieldAlert, RefreshCw, Layers, User, Calendar, Lock, FileDown } from 'lucide-react';
 import {
   RadarChart,
   Radar,
@@ -11,7 +11,7 @@ import {
   Tooltip,
 } from 'recharts';
 import { toeService } from '../services/api';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../hooks/useAuth';
 
 function Report() {
   const { user } = useAuth();
@@ -20,9 +20,11 @@ function Report() {
   const [error, setError] = useState(null);
 
   const [exportando, setExportando] = useState(false);
+  const [bloqueando, setBloqueando] = useState(false);
+  const [bloqueado, setBloqueado] = useState(false);
   const [exportError, setExportError] = useState(null);
+  const [pdfBackend, setPdfBackend] = useState(false);
 
-  // Referencia al área del DOM que se convertirá en PDF
   const reportRef = useRef(null);
 
   const handleExportPDF = useReactToPrint({
@@ -54,9 +56,10 @@ function Report() {
       setError(null);
       const res = await toeService.calcularDictamen(evalId);
       setData(res);
+      setBloqueado(res.estado === 'Bloqueado');
     } catch (err) {
       console.error('Error al calcular dictamen:', err);
-      setError('Error al conectar con el motor de inferencia en Django.');
+      setError('No se pudo calcular el dictamen. Verifique la conexión con el servidor.');
     } finally {
       setLoading(false);
     }
@@ -66,13 +69,48 @@ function Report() {
     cargarDictamen();
   }, []);
 
+  const handleBloquear = async () => {
+    const evalId = localStorage.getItem('activeEvalId');
+    if (!evalId || !confirm('¿Cerrar y firmar esta evaluación? Esta acción es irreversible.')) return;
+    setBloqueando(true);
+    try {
+      const res = await toeService.bloquearEvaluacion(evalId);
+      setData(res);
+      setBloqueado(true);
+    } catch (err) {
+      alert(err.response?.data?.error || 'No se pudo bloquear la evaluación');
+    } finally {
+      setBloqueando(false);
+    }
+  };
+
+  const handleExportBackendPDF = async () => {
+    const evalId = localStorage.getItem('activeEvalId');
+    if (!evalId) return;
+    setPdfBackend(true);
+    setExportError(null);
+    try {
+      const res = await toeService.exportarPDF(evalId);
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Reporte_TOE_${data?.software?.nombre || 'Auditoria'}.pdf`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError('No se pudo generar el PDF en el servidor.');
+    } finally {
+      setPdfBackend(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="glass p-16 rounded-3xl border border-gray-800 text-center space-y-4 max-w-xl mx-auto my-12 animate-fade-in">
         <RefreshCw className="animate-spin text-blue-500 mx-auto" size={36} />
-        <h3 className="text-lg font-bold text-white">Procesando Inferencia Algorítmica...</h3>
+        <h3 className="text-lg font-bold text-white">Calculando dictamen...</h3>
         <p className="text-xs text-gray-400">
-          Calculando promedios dimensionales TOE y clasificando matriz FODA sin división entera.
+          Procesando los resultados de la evaluación y la matriz FODA.
         </p>
       </div>
     );
@@ -101,7 +139,7 @@ function Report() {
   const numA = desglose.amenazas.length;
 
   const promedios = data.promedios_dimensiones || { Tecnologica: 0, Organizacional: 0, Economica: 0 };
-  const clase = data.clase_dictamen || 'CLASE C';
+  const clase = data.clase_dictamen || 'CLASE A';
 
   const radarData = [
     { dimension: 'Tecnológica', valor: promedios.Tecnologica || 0, fullMark: 100 },
@@ -114,29 +152,29 @@ function Report() {
   // Configuración visual según la clase del dictamen
   const dictamenConfig = {
     'CLASE A': {
-      titulo: 'CLASE A (Rechazar)',
-      desc: 'No es posible adoptar. Se han detectado amenazas y/o debilidades en factores cuya importancia relativa es fundamental o importante. Es indispensable proporcionar recursos para mitigar las brechas críticas.',
-      color: 'text-red-400',
-      bg: 'bg-red-500/10 border-red-500/20',
-      badge: 'Rechazo Técnico'
-    },
-    'CLASE B': {
-      titulo: 'CLASE B (Evaluar / Condicionado)',
-      desc: 'Adopción viable con reservas. Existen brechas moderadas que requieren un plan de mitigación formal antes del pase a producción.',
-      color: 'text-amber-400',
-      bg: 'bg-amber-500/10 border-amber-500/20',
-      badge: 'Adopción Condicionada'
-    },
-    'CLASE C': {
-      titulo: 'CLASE C (Adoptar)',
-      desc: 'Adopción recomendada. El software cumple satisfactoriamente con los umbrales tecnológicos, organizacionales y económicos evaluados.',
+      titulo: 'CLASE A (Adoptar)',
+      desc: 'Adoptar el FLOSS seleccionado. Los factores evaluados relevantes se identificaron como Oportunidades y/o Fortalezas.',
       color: 'text-emerald-400',
       bg: 'bg-emerald-500/10 border-emerald-500/20',
-      badge: 'Viable / Recomendado'
+      badge: 'Adoptar'
+    },
+    'CLASE B': {
+      titulo: 'CLASE B (Condicionado)',
+      desc: 'Es posible adoptar con matices. Se detectaron debilidades o amenazas en factores de importancia relativa opcional.',
+      color: 'text-amber-400',
+      bg: 'bg-amber-500/10 border-amber-500/20',
+      badge: 'Condicionado'
+    },
+    'CLASE C': {
+      titulo: 'CLASE C (Rechazar / Posponer)',
+      desc: 'Se sugiere posponer la adopción. Hay debilidades o amenazas en factores importantes o fundamentales.',
+      color: 'text-red-400',
+      bg: 'bg-red-500/10 border-red-500/20',
+      badge: 'Rechazar'
     }
   }[clase] || {
     titulo: clase,
-    desc: 'Dictamen algorítmico calculado exitosamente.',
+    desc: 'Dictamen calculado correctamente.',
     color: 'text-blue-400',
     bg: 'bg-blue-500/10 border-blue-500/20',
     badge: 'Calculado'
@@ -144,7 +182,6 @@ function Report() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Estilos para forzar la impresión de colores de fondo oscuros en el PDF */}
       <style>{`
         @media print {
           body {
@@ -159,17 +196,16 @@ function Report() {
         }
       `}</style>
 
-      {/* BANNER SUPERIOR CON BOTÓN DE EXPORTACIÓN */}
       <div className="glass p-6 sm:p-8 rounded-3xl border border-gray-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
         <div className="space-y-1.5">
           <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
-            Auditoría Calculada (Motor Transaccional)
+            Auditoría calculada
           </span>
           <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight pt-1">
-            Informe Ejecutivo: {data.software?.nombre || 'Software FLOSS'}
+            Informe: {data.software?.nombre || 'Software FLOSS'}
           </h2>
           <p className="text-gray-400 text-xs sm:text-sm">
-            Análisis consolidado multidimensional TOE e inferencia algorítmica sin división entera.
+            Resultados de la evaluación y matriz FODA.
           </p>
         </div>
 
@@ -177,31 +213,46 @@ function Report() {
           {exportError && (
             <p className="text-red-400 text-xs font-medium max-w-xs text-right">{exportError}</p>
           )}
-          <button
-            type="button"
-            onClick={() => handleExportPDF()}
-            disabled={exportando}
-            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold px-6 py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-blue-500/20 active:scale-95 flex items-center justify-center gap-2 cursor-pointer print:hidden"
-          >
-            {exportando ? (
-              <>
-                <RefreshCw size={18} className="animate-spin" /> Preparando PDF...
-              </>
-            ) : (
-              <>
-                <Download size={18} /> EXPORTAR DICTAMEN PDF
-              </>
+          <div className="flex flex-wrap gap-2 justify-end">
+            <button
+              type="button"
+              onClick={handleExportBackendPDF}
+              disabled={pdfBackend}
+              className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold px-5 py-3 rounded-xl text-xs transition-all flex items-center gap-2 cursor-pointer print:hidden"
+            >
+              {pdfBackend ? <RefreshCw size={16} className="animate-spin" /> : <FileDown size={16} />}
+              PDF Servidor
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExportPDF()}
+              disabled={exportando}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold px-5 py-3 rounded-xl text-xs transition-all flex items-center gap-2 cursor-pointer print:hidden"
+            >
+              {exportando ? <RefreshCw size={16} className="animate-spin" /> : <Download size={16} />}
+              Imprimir PDF
+            </button>
+            {!bloqueado && data.estado === 'Calculado' && (
+              <button
+                type="button"
+                onClick={handleBloquear}
+                disabled={bloqueando}
+                className="bg-amber-600 hover:bg-amber-500 disabled:opacity-60 text-white font-bold px-5 py-3 rounded-xl text-xs transition-all flex items-center gap-2 cursor-pointer print:hidden"
+              >
+                {bloqueando ? <RefreshCw size={16} className="animate-spin" /> : <Lock size={16} />}
+                Cerrar y Firmar
+              </button>
             )}
-          </button>
-          <p className="text-[10px] text-gray-500 text-right max-w-xs print:hidden">
-            Se abrirá el diálogo de impresión. Elija &quot;Guardar como PDF&quot; como destino.
-          </p>
+            {bloqueado && (
+              <span className="text-xs text-gray-400 bg-gray-800 px-3 py-2 rounded-xl border border-gray-700 flex items-center gap-1">
+                <Lock size={14} /> Evaluación bloqueada
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* CONTENEDOR PRINCIPAL IMPRIMIBLE */}
       <div ref={reportRef} className="space-y-6 p-2">
-        {/* KPI CARDS (CONTEO FODA) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div className="glass p-5 rounded-2xl border border-emerald-500/30 bg-emerald-950/10 space-y-1">
             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Fortalezas</span>
@@ -221,16 +272,14 @@ function Report() {
           </div>
         </div>
 
-        {/* GRÁFICO DE RADAR / COBERTURA Y DICTAMEN OFICIAL */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Columna Izquierda (7 Col): Cobertura TOE Real */}
           <div className="lg:col-span-7 glass p-6 sm:p-8 rounded-3xl border border-gray-800 flex flex-col justify-between space-y-6">
             <div className="space-y-1">
               <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                <Layers size={16} className="text-blue-400" /> Cobertura TOE Real
+                <Layers size={16} className="text-blue-400" /> Cobertura por dimensión
               </h3>
               <p className="text-xs text-gray-400">
-                Promedios exactos de cumplimiento evaluados en la base de datos relacional PostgreSQL.
+                Promedios de cumplimiento por dimensión TOE.
               </p>
             </div>
 
@@ -250,7 +299,6 @@ function Report() {
                 </div>
               </div>
 
-              {/* Gráfico Radar TOE dinámico */}
               <div className="flex flex-col items-center justify-center p-2 bg-black/40 rounded-2xl border border-gray-800/80">
                 <ResponsiveContainer width="100%" height={220}>
                   <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
@@ -291,10 +339,9 @@ function Report() {
             </div>
           </div>
 
-          {/* Columna Derecha (5 Col): Dictamen Algorítmico */}
           <div className="lg:col-span-5 glass p-6 sm:p-8 rounded-3xl border border-gray-800 flex flex-col justify-between space-y-6 relative overflow-hidden">
             <div className="text-center space-y-2">
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Dictamen Algorítmico Oficial</span>
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Dictamen</span>
               <h1 className={`text-3xl sm:text-4xl font-black tracking-tight ${dictamenConfig.color}`}>
                 {clase}
               </h1>
@@ -322,10 +369,9 @@ function Report() {
           </div>
         </div>
 
-        {/* TABLA: DESGLOSE OFICIAL DE FACTORES (MATRIZ FODA) */}
         <div className="glass p-6 sm:p-8 rounded-3xl border border-gray-800 space-y-4">
           <h3 className="text-base font-bold text-white tracking-wide">
-            Desglose Oficial de Factores (Matriz FODA)
+            Desglose de factores (Matriz FODA)
           </h3>
 
           <div className="overflow-x-auto">
@@ -340,7 +386,6 @@ function Report() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/60 font-medium">
-                {/* Combinamos todas las listas FODA para renderizarlas en la tabla */}
                 {[
                   ...desglose.fortalezas.map(f => ({ ...f, tipo: 'FORTALEZA', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' })),
                   ...desglose.oportunidades.map(o => ({ ...o, tipo: 'OPORTUNIDAD', color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' })),
