@@ -13,3 +13,10 @@
 !/frontend/**
 
 contexto.md
+
+# Secretos locales (no subir al repositorio)
+backend/.env
+frontend/.env
+.env.local
+.vercel
+.env*

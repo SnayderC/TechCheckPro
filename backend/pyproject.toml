@@ -1,3 +1,20 @@
+[project]
+name = "techcheck"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "Django==4.2.13",
+    "python-dotenv==1.0.1",
+    "djangorestframework==3.15.1",
+    "djangorestframework-simplejwt==5.3.1",
+    "psycopg2-binary==2.9.9",
+    "django-cors-headers==4.3.1",
+    "pandas==2.2.2",
+    "gunicorn==22.0.0",
+    "whitenoise==6.7.0",
+    "xhtml2pdf==0.2.16",
+]
+
 [tool.vercel]
 entrypoint = "techcheck.wsgi:application"
 
