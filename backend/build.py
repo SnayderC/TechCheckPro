@@ -16,6 +16,16 @@ def main():
     if Factor.objects.count() == 0:
         call_command('seed_toe')
 
+    admin_user = os.environ.get('ADMIN_USERNAME')
+    admin_pass = os.environ.get('ADMIN_PASSWORD')
+    if admin_user and admin_pass:
+        call_command(
+            'create_admin',
+            username=admin_user,
+            password=admin_pass,
+            email=os.environ.get('ADMIN_EMAIL', 'admin@techcheck.local'),
+        )
+
 
 if __name__ == '__main__':
     main()

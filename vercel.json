@@ -12,6 +12,7 @@
     },
     "backend": {
       "root": "backend",
+      "entrypoint": "techcheck.wsgi:application",
       "functions": {
         "techcheck/wsgi.py": {
           "maxDuration": 60
