@@ -19,8 +19,27 @@ function Report() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const [exportando, setExportando] = useState(false);
+  const [exportError, setExportError] = useState(null);
+
   // Referencia al área del DOM que se convertirá en PDF
-  const reportRef = useRef();
+  const reportRef = useRef(null);
+
+  const handleExportPDF = useReactToPrint({
+    contentRef: reportRef,
+    documentTitle: `Dictamen_FLOSS_${data?.software?.nombre || 'Auditoria'}_${new Date().toISOString().slice(0, 10)}`,
+    onBeforePrint: () => {
+      setExportando(true);
+      setExportError(null);
+      return Promise.resolve();
+    },
+    onAfterPrint: () => setExportando(false),
+    onPrintError: (_location, err) => {
+      setExportando(false);
+      setExportError('No se pudo abrir el diálogo de impresión. Verifique que el navegador no bloquee ventanas emergentes.');
+      console.error('Error exportando PDF:', err);
+    },
+  });
 
   const cargarDictamen = async () => {
     const evalId = localStorage.getItem('activeEvalId');
@@ -46,12 +65,6 @@ function Report() {
   useEffect(() => {
     cargarDictamen();
   }, []);
-
-  // Hook para gestionar la generación y descarga del PDF
-  const handleExportPDF = useReactToPrint({
-    content: () => reportRef.current,
-    documentTitle: `Dictamen_FLOSS_${data?.software?.nombre || 'Auditoria'}_${new Date().toISOString().slice(0, 10)}`,
-  });
 
   if (loading) {
     return (
@@ -160,12 +173,30 @@ function Report() {
           </p>
         </div>
 
-        <button
-          onClick={handleExportPDF}
-          className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-blue-500/20 active:scale-95 flex items-center justify-center gap-2 cursor-pointer shrink-0 print:hidden"
-        >
-          <Download size={18} /> EXPORTAR DICTAMEN PDF
-        </button>
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          {exportError && (
+            <p className="text-red-400 text-xs font-medium max-w-xs text-right">{exportError}</p>
+          )}
+          <button
+            type="button"
+            onClick={() => handleExportPDF()}
+            disabled={exportando}
+            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold px-6 py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-blue-500/20 active:scale-95 flex items-center justify-center gap-2 cursor-pointer print:hidden"
+          >
+            {exportando ? (
+              <>
+                <RefreshCw size={18} className="animate-spin" /> Preparando PDF...
+              </>
+            ) : (
+              <>
+                <Download size={18} /> EXPORTAR DICTAMEN PDF
+              </>
+            )}
+          </button>
+          <p className="text-[10px] text-gray-500 text-right max-w-xs print:hidden">
+            Se abrirá el diálogo de impresión. Elija &quot;Guardar como PDF&quot; como destino.
+          </p>
+        </div>
       </div>
 
       {/* CONTENEDOR PRINCIPAL IMPRIMIBLE */}
