@@ -9,12 +9,9 @@ def main():
     django.setup()
 
     from django.core.management import call_command
-    from core.models import Factor
 
     call_command('migrate', '--noinput')
-
-    if Factor.objects.count() == 0:
-        call_command('seed_toe')
+    call_command('seed_toe')
 
     admin_user = os.environ.get('ADMIN_USERNAME')
     admin_pass = os.environ.get('ADMIN_PASSWORD')

@@ -13,6 +13,9 @@
 !/frontend/**
 
 contexto.md
+!/docs/
+!/DOCUMENTACION_PROYECTO.pdf
+!/scripts/
 
 # Secretos locales (no subir al repositorio)
 backend/.env

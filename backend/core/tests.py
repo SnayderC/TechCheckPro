@@ -272,6 +272,40 @@ class EvaluacionAPITestCase(TestCase):
         }, format='json')
         self.assertEqual(res.status_code, 403)
 
+    def test_autosave_solo_marca_respondido_explicito(self):
+        subfactor_b = Subfactor.objects.create(
+            factor=self.factor,
+            enunciado_pregunta='¿Tiene auditoría?',
+        )
+        RespuestaEvaluacion.objects.create(
+            evaluacion=self.eval_a,
+            subfactor=subfactor_b,
+            valor_likert=1,
+            respondido=False,
+        )
+        client_a = self._token('user_a', 'pass12345')
+        res = client_a.post('/api/evaluaciones/autosave/', {
+            'evaluacion_id': self.eval_a.id,
+            'puntajes': {
+                str(self.subfactor.id): 4,
+                str(subfactor_b.id): 1,
+            },
+            'respondidos': {str(self.subfactor.id): True},
+            'decisiones': {str(self.factor.id): 3},
+        }, format='json')
+        self.assertEqual(res.status_code, 200)
+
+        resp_a = RespuestaEvaluacion.objects.get(
+            evaluacion=self.eval_a, subfactor=self.subfactor,
+        )
+        resp_b = RespuestaEvaluacion.objects.get(
+            evaluacion=self.eval_a, subfactor=subfactor_b,
+        )
+        self.assertTrue(resp_a.respondido)
+        self.assertEqual(resp_a.valor_likert, 4)
+        self.assertFalse(resp_b.respondido)
+        self.assertEqual(resp_b.valor_likert, 1)
+
     def test_calcular_falla_si_incompleto(self):
         client_a = self._token('user_a', 'pass12345')
         res = client_a.post('/api/evaluaciones/calcular/', {
@@ -303,7 +337,7 @@ class EvaluacionAPITestCase(TestCase):
         res = client_a.post('/api/evaluaciones/iniciar/', {'nombre': '  '})
         self.assertEqual(res.status_code, 400)
 
-    def test_iniciar_decisor_por_defecto_irrelevante(self):
+    def test_iniciar_decisor_por_defecto_importancia_sugerida(self):
         client_a = self._token('user_a', 'pass12345')
         res = client_a.post('/api/evaluaciones/iniciar/', {
             'nombre': 'LibreOffice Test',
@@ -311,5 +345,8 @@ class EvaluacionAPITestCase(TestCase):
         }, format='json')
         self.assertEqual(res.status_code, 201)
         eval_id = res.data['evaluacion_id']
-        detalle = DetalleEvaluacionFactor.objects.filter(evaluacion_id=eval_id).first()
-        self.assertEqual(detalle.importancia_decisor, Decimal('1.00'))
+        detalle = DetalleEvaluacionFactor.objects.filter(
+            evaluacion_id=eval_id,
+            factor=self.factor,
+        ).first()
+        self.assertEqual(detalle.importancia_decisor, self.factor.importancia_sugerida)

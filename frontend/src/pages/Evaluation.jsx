@@ -51,6 +51,7 @@ function Evaluation({ onNext, onSyncChange }) {
   const [pendientesMsg, setPendientesMsg] = useState(null);
 
   const autosaveTimer = useRef(null);
+  const autosavePromise = useRef(null);
 
   const updateSync = useCallback(
     (status) => {
@@ -98,12 +99,17 @@ function Evaluation({ onNext, onSyncChange }) {
         if (cache?.puntajes) {
           setSubfactorScores((prev) => ({ ...prev, ...cache.puntajes }));
           if (cache.decisiones) setFactorDecisions((prev) => ({ ...prev, ...cache.decisiones }));
+          if (cache.respondidos) {
+            setRespondidos((prev) => ({ ...prev, ...cache.respondidos }));
+          }
         }
 
         const decisiones = {};
         catalogo.forEach((f) => {
           const guardada = detalle.decisiones?.[String(f.id)];
-          decisiones[f.id] = guardada !== undefined ? normalizarNivel(guardada) : 1;
+          decisiones[f.id] = guardada !== undefined
+            ? normalizarNivel(guardada)
+            : normalizarNivel(f.importancia_sugerida);
         });
         setFactorDecisions(decisiones);
 
@@ -122,6 +128,32 @@ function Evaluation({ onNext, onSyncChange }) {
     cargarDatos();
   }, []);
 
+  const guardarEnServidor = useCallback(
+    async (nuevasDecisiones, nuevosPuntajes, nuevosRespondidos) => {
+      const promesa = toeService.guardarProgreso(
+        evaluacionId,
+        nuevosPuntajes,
+        nuevasDecisiones,
+        nuevosRespondidos,
+      );
+      autosavePromise.current = promesa;
+      try {
+        await promesa;
+        updateSync('saved');
+        setTimeout(() => updateSync('idle'), 2000);
+      } catch (err) {
+        console.error('Fallo en autoguardado:', err);
+        updateSync('offline');
+        throw err;
+      } finally {
+        if (autosavePromise.current === promesa) {
+          autosavePromise.current = null;
+        }
+      }
+    },
+    [evaluacionId, updateSync],
+  );
+
   const dispararAutosave = useCallback(
     (nuevasDecisiones, nuevosPuntajes, nuevosRespondidos) => {
       if (evaluacionEstado === 'Calculado' || evaluacionEstado === 'Bloqueado') return;
@@ -135,18 +167,11 @@ function Evaluation({ onNext, onSyncChange }) {
       if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
       updateSync('saving');
 
-      autosaveTimer.current = setTimeout(async () => {
-        try {
-          await toeService.guardarProgreso(evaluacionId, nuevosPuntajes, nuevasDecisiones);
-          updateSync('saved');
-          setTimeout(() => updateSync('idle'), 2000);
-        } catch (err) {
-          console.error('Fallo en autoguardado:', err);
-          updateSync('offline');
-        }
+      autosaveTimer.current = setTimeout(() => {
+        guardarEnServidor(nuevasDecisiones, nuevosPuntajes, nuevosRespondidos);
       }, 400);
     },
-    [evaluacionId, evaluacionEstado, updateSync],
+    [evaluacionId, evaluacionEstado, updateSync, guardarEnServidor],
   );
 
   const handleDecisionChange = (factorId, valNum) => {
@@ -169,7 +194,7 @@ function Evaluation({ onNext, onSyncChange }) {
     const meta = {};
     factores.forEach((f) => {
       const isVal = normalizarNivel(f.importancia_sugerida);
-      const idVal = normalizarNivel(factorDecisions[f.id] ?? 1);
+      const idVal = normalizarNivel(factorDecisions[f.id] ?? f.importancia_sugerida);
       const ir = calcularImportanciaRelativa(isVal, idVal);
       meta[f.id] = {
         isVal,
@@ -216,6 +241,7 @@ function Evaluation({ onNext, onSyncChange }) {
   const totalSubfactores = todosSubfactores.length;
   const completados = todosSubfactores.filter((sf) => respondidos[sf.id]).length;
   const porcentaje = totalSubfactores > 0 ? Math.round((completados / totalSubfactores) * 100) : 0;
+  const puedeCalcular = totalSubfactores > 0 && completados === totalSubfactores;
 
   const factoresConCoincidencias = useMemo(() => {
     if (!busqueda.trim()) return factores;
@@ -226,8 +252,27 @@ function Evaluation({ onNext, onSyncChange }) {
   const handleCalcular = async () => {
     setCalcularError(null);
     setPendientesMsg(null);
+
+    if (!puedeCalcular) {
+      const faltan = totalSubfactores - completados;
+      setPendientesMsg(
+        `Debe calificar explícitamente todos los subfactores relevantes. Faltan ${faltan}.`,
+      );
+      return;
+    }
+
     setProcesando(true);
     try {
+      if (autosaveTimer.current) {
+        clearTimeout(autosaveTimer.current);
+        autosaveTimer.current = null;
+      }
+      if (autosavePromise.current) {
+        await autosavePromise.current;
+      } else {
+        await guardarEnServidor(factorDecisions, subfactorScores, respondidos);
+      }
+
       await toeService.calcularDictamen(evaluacionId);
       wizardCache.clear(evaluacionId);
       onNext();
@@ -395,7 +440,7 @@ function Evaluation({ onNext, onSyncChange }) {
             <FactorDetailPanel
               factor={selectedFactor}
               meta={factorMeta[selectedFactor.id]}
-              idVal={normalizarNivel(factorDecisions[selectedFactor.id] ?? 1)}
+              idVal={normalizarNivel(factorDecisions[selectedFactor.id] ?? selectedFactor.importancia_sugerida)}
               subfactorScores={subfactorScores}
               respondidos={respondidos}
               soloLectura={soloLectura}
@@ -405,6 +450,12 @@ function Evaluation({ onNext, onSyncChange }) {
           ) : null}
 
           <div className="flex flex-col items-end gap-2 pt-6">
+            {!puedeCalcular && !soloLectura && totalSubfactores > 0 && (
+              <p className="text-gray-400 text-xs text-right max-w-md">
+                Califique los {totalSubfactores - completados} subfactores pendientes
+                (debe seleccionar una opción en cada uno) antes de calcular el dictamen.
+              </p>
+            )}
             {pendientesMsg && (
               <p className="text-amber-400 text-xs font-medium bg-amber-500/10 border border-amber-500/30 px-4 py-2 rounded-xl">
                 {pendientesMsg}
@@ -415,7 +466,7 @@ function Evaluation({ onNext, onSyncChange }) {
             )}
             <button
               onClick={handleCalcular}
-              disabled={procesando || soloLectura}
+              disabled={procesando || soloLectura || !puedeCalcular}
               className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl text-xs font-semibold uppercase tracking-wider flex items-center gap-2 transition-all active:scale-95 cursor-pointer shadow-lg shadow-blue-500/20"
             >
               {procesando ? (
@@ -554,7 +605,9 @@ function FactorDetailPanel({
 
 function SubfactorCard({ sf, index, currentScore, calificado, onScoreChange, soloLectura, showFactorMeta }) {
   return (
-    <div className="glass p-4 rounded-xl border border-gray-800 space-y-3">
+    <div className={`glass p-4 rounded-xl border space-y-3 ${
+      calificado ? 'border-gray-800' : 'border-amber-500/30 bg-amber-500/5'
+    }`}>
       {showFactorMeta && (
         <div className="flex gap-2 text-[10px] uppercase font-bold tracking-wider">
           <span className="text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
@@ -568,13 +621,17 @@ function SubfactorCard({ sf, index, currentScore, calificado, onScoreChange, sol
           <span className="text-blue-400 font-bold mr-2">{index + 1}.</span>
           {sf.enunciado_pregunta}
         </p>
-        {calificado && (
+        {calificado ? (
           <CheckCircle2 size={16} className="text-green-400 shrink-0 mt-0.5" />
+        ) : (
+          <span className="text-[10px] font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded shrink-0">
+            Pendiente
+          </span>
         )}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
         {LIKERT_LEVELS.map((item) => {
-          const active = currentScore === item.val;
+          const active = calificado && currentScore === item.val;
           return (
             <button
               key={item.val}

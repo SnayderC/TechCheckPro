@@ -12,12 +12,14 @@ import {
 } from 'recharts';
 import { toeService } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
+import { verificarCompletitudEvaluacion } from '../utils/evaluacionCompletitud';
 
-function Report() {
+function Report({ onIrEvaluacion }) {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [errorIncompleta, setErrorIncompleta] = useState(false);
 
   const [exportando, setExportando] = useState(false);
   const [bloqueando, setBloqueando] = useState(false);
@@ -54,12 +56,30 @@ function Report() {
     try {
       setLoading(true);
       setError(null);
+      setErrorIncompleta(false);
+
+      const status = await verificarCompletitudEvaluacion(evalId);
+      if (!status.puedeVerDictamen) {
+        setErrorIncompleta(true);
+        setError(
+          status.mensajeBloqueo
+          || 'Debe completar la Matriz TOE antes de calcular el dictamen.',
+        );
+        return;
+      }
+
       const res = await toeService.calcularDictamen(evalId);
       setData(res);
       setBloqueado(res.estado === 'Bloqueado');
     } catch (err) {
       console.error('Error al calcular dictamen:', err);
-      setError('No se pudo calcular el dictamen. Verifique la conexión con el servidor.');
+      const apiMsg = err.response?.data?.mensaje;
+      if (err.response?.data?.error === 'completitud_incompleta') {
+        setErrorIncompleta(true);
+        setError(apiMsg || 'Faltan subfactores por calificar en la Matriz TOE.');
+      } else {
+        setError(apiMsg || 'No se pudo calcular el dictamen. Verifique la conexión con el servidor.');
+      }
     } finally {
       setLoading(false);
     }
@@ -118,15 +138,28 @@ function Report() {
 
   if (error || !data) {
     return (
-      <div className="glass p-12 rounded-3xl border border-red-500/20 text-center space-y-4 max-w-xl mx-auto my-12 animate-fade-in">
-        <ShieldAlert className="text-red-400 mx-auto" size={40} />
+      <div className={`glass p-12 rounded-3xl border text-center space-y-4 max-w-xl mx-auto my-12 animate-fade-in ${
+        errorIncompleta ? 'border-amber-500/30' : 'border-red-500/20'
+      }`}>
+        <ShieldAlert className={`mx-auto ${errorIncompleta ? 'text-amber-400' : 'text-red-400'}`} size={40} />
         <h3 className="text-base font-bold text-white">{error || 'No se obtuvieron datos.'}</h3>
-        <button
-          onClick={cargarDictamen}
-          className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer"
-        >
-          Reintentar Cálculo
-        </button>
+        {errorIncompleta ? (
+          <button
+            type="button"
+            onClick={() => onIrEvaluacion?.()}
+            className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer"
+          >
+            Ir a Matriz TOE
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={cargarDictamen}
+            className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer"
+          >
+            Reintentar Cálculo
+          </button>
+        )}
       </div>
     );
   }

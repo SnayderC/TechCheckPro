@@ -25,7 +25,7 @@ function WhatIf() {
       setPuntajes(det.puntajes || {});
       const dec = {};
       cat.forEach((f) => {
-        dec[f.id] = det.decisiones?.[String(f.id)] ?? 1;
+        dec[f.id] = det.decisiones?.[String(f.id)] ?? f.importancia_sugerida;
       });
       setDecisiones(dec);
     });

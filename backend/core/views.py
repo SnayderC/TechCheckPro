@@ -215,7 +215,7 @@ class IniciarEvaluacionView(APIView):
                 DetalleEvaluacionFactor.objects.get_or_create(
                     evaluacion=evaluacion,
                     factor=factor,
-                    defaults={'importancia_decisor': Decimal('1.00')},
+                    defaults={'importancia_decisor': factor.importancia_sugerida},
                 )
                 for subf in factor.subfactores.all():
                     RespuestaEvaluacion.objects.get_or_create(
@@ -271,6 +271,7 @@ class GuardarProgresoView(APIView):
         eval_id = request.data.get('evaluacion_id')
         puntajes = request.data.get('puntajes', {})
         decisiones = request.data.get('decisiones', {})
+        respondidos = request.data.get('respondidos', {})
 
         evaluacion, error_response = _get_evaluacion_usuario(request, eval_id)
         if error_response:
@@ -287,10 +288,14 @@ class GuardarProgresoView(APIView):
                 likert = int(val)
                 if likert < 1 or likert > 4:
                     continue
+                sf_key = str(sf_id)
+                marcado = bool(
+                    respondidos.get(sf_key, respondidos.get(int(sf_id), False)),
+                )
                 RespuestaEvaluacion.objects.filter(
                     evaluacion=evaluacion,
                     subfactor_id=sf_id,
-                ).update(valor_likert=likert, respondido=True)
+                ).update(valor_likert=likert, respondido=marcado)
 
             for fac_id, val_dec in decisiones.items():
                 importancia = float(val_dec)

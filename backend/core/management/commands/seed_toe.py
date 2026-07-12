@@ -35,9 +35,9 @@ class Command(BaseCommand):
                     # Si no tiene dimensión explícita en factors.csv, la inferimos del segundo archivo
                     factores_dict[nombre_factor] = {
                         'sugerida': Decimal(row['Sugerida'].strip()),
-                        'alcance': row['Alcance'].strip()
+                        'alcance': row['Alcance'].strip(),
                     }
-        
+
         # 3. Cargar Subfactores cruzando con guiosad_data.csv
         if os.path.exists(data_path):
             with open(data_path, mode='r', encoding='utf-8') as f:
@@ -46,18 +46,22 @@ class Command(BaseCommand):
                     dim_nombre = row['Dimensión'].strip()
                     fac_nombre = row['Factor'].strip()
                     pregunta = row['Subfactor'].strip()
-                    
+
                     dim_obj = dims.get(dim_nombre)
                     meta_fac = factores_dict.get(fac_nombre, {'sugerida': Decimal('2.00'), 'alcance': 'Externo'})
-                    
-                    factor_obj, _ = Factor.objects.get_or_create(
+
+                    factor_obj, created = Factor.objects.get_or_create(
                         nombre_factor=fac_nombre,
                         dimension=dim_obj,
                         defaults={
                             'importancia_sugerida': meta_fac['sugerida'],
-                            'alcance': meta_fac['alcance']
-                        }
+                            'alcance': meta_fac['alcance'],
+                        },
                     )
+                    if not created:
+                        factor_obj.importancia_sugerida = meta_fac['sugerida']
+                        factor_obj.alcance = meta_fac['alcance']
+                        factor_obj.save(update_fields=['importancia_sugerida', 'alcance'])
                     
                     Subfactor.objects.get_or_create(
                         factor=factor_obj,

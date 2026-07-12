@@ -12,6 +12,7 @@ import WhatIf from './pages/WhatIf';
 import ExecutiveDashboard from './pages/ExecutiveDashboard';
 import AdminUsers from './pages/AdminUsers';
 import AdminCatalog from './pages/AdminCatalog';
+import { verificarCompletitudEvaluacion } from './utils/evaluacionCompletitud';
 
 const ProtectedRoute = ({ children, adminOnly = false }) => {
   const { user, isAdmin } = useAuth();
@@ -36,12 +37,13 @@ const SYNC_LABELS = {
 function WizardLayout() {
   const [currentTab, setCurrentTab] = React.useState('dashboard');
   const [syncStatus, setSyncStatus] = React.useState('idle');
+  const [tabAviso, setTabAviso] = React.useState(null);
   const { user, logout, isAdmin } = useAuth();
 
   const tabs = [
     { id: 'dashboard', label: 'Panel de Control', roles: 'all' },
     { id: 'evaluation', label: 'Matriz TOE', roles: 'all' },
-    { id: 'report', label: 'Dictamen FODA', roles: 'all' },
+    { id: 'report', label: 'Dictamen FODA', roles: 'all', requiereEvaluacionCompleta: true },
     { id: 'compare', label: 'Comparar', roles: 'all' },
     { id: 'whatif', label: 'What-If', roles: 'all' },
     ...(isAdmin ? [
@@ -51,11 +53,32 @@ function WizardLayout() {
     ] : []),
   ];
 
-  const handleTabChange = (tabId) => {
+  const handleTabChange = async (tabId) => {
+    setTabAviso(null);
+
     if (['evaluation', 'report', 'whatif'].includes(tabId) && !localStorage.getItem('activeEvalId')) {
-      alert('Primero registre o seleccione una auditoría en el Panel de Control.');
+      setTabAviso('Primero registre o seleccione una auditoría en el Panel de Control.');
       return;
     }
+
+    const tab = tabs.find((t) => t.id === tabId);
+    if (tab?.requiereEvaluacionCompleta) {
+      const evalId = localStorage.getItem('activeEvalId');
+      try {
+        const status = await verificarCompletitudEvaluacion(evalId);
+        if (!status.puedeVerDictamen) {
+          setTabAviso(
+            status.mensajeBloqueo
+            || 'Complete y califique todos los subfactores relevantes en la Matriz TOE antes de ver el dictamen.',
+          );
+          return;
+        }
+      } catch {
+        setTabAviso('No se pudo verificar el progreso de la evaluación. Intente de nuevo.');
+        return;
+      }
+    }
+
     setCurrentTab(tabId);
   };
 
@@ -109,10 +132,30 @@ function WizardLayout() {
         </div>
       </nav>
 
+      {tabAviso && (
+        <div className="max-w-6xl mx-auto px-4 mt-4">
+          <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm px-4 py-3 rounded-xl flex items-start justify-between gap-4">
+            <p>{tabAviso}</p>
+            <button
+              type="button"
+              onClick={() => setTabAviso(null)}
+              className="text-amber-400 hover:text-amber-200 text-xs shrink-0 cursor-pointer"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-6xl mx-auto p-4 mt-4 mb-12">
         {currentTab === 'dashboard' && <Dashboard onNavigate={() => handleTabChange('evaluation')} />}
-        {currentTab === 'evaluation' && <Evaluation onNext={() => handleTabChange('report')} onSyncChange={setSyncStatus} />}
-        {currentTab === 'report' && <Report />}
+        {currentTab === 'evaluation' && (
+          <Evaluation
+            onNext={() => handleTabChange('report')}
+            onSyncChange={setSyncStatus}
+          />
+        )}
+        {currentTab === 'report' && <Report onIrEvaluacion={() => handleTabChange('evaluation')} />}
         {currentTab === 'compare' && <Compare />}
         {currentTab === 'whatif' && <WhatIf />}
         {currentTab === 'executive' && isAdmin && <ExecutiveDashboard />}

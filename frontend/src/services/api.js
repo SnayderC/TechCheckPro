@@ -72,11 +72,12 @@ export const toeService = {
   getEvaluacionDetalle: async (id) =>
     (await apiClient.get(`/evaluaciones/${id}/`)).data,
 
-  guardarProgreso: async (evaluacionId, puntajes, decisiones) =>
+  guardarProgreso: async (evaluacionId, puntajes, decisiones, respondidos = {}) =>
     (await apiClient.post('/evaluaciones/autosave/', {
       evaluacion_id: evaluacionId,
       puntajes,
       decisiones,
+      respondidos,
     })).data,
 
   calcularDictamen: async (evaluacionId) =>
