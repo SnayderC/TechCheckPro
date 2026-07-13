@@ -1,6 +1,7 @@
 # Mantener solo estos elementos rastreados
 *
 !/.gitignore
+!/README.md
 !/backend/
 !/frontend/
 !/docker-compose.yml
